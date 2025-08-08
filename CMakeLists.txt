@@ -25,16 +25,16 @@ target_include_directories(lvgl PUBLIC ${PROJECT_SOURCE_DIR})
 if (LV_USE_DRM)
     include(${CMAKE_CURRENT_LIST_DIR}/lvgl/tests/FindLibDRM.cmake)
     include_directories(${Libdrm_INCLUDE_DIRS})
-    add_executable(lvgl-app main.c mouse_cursor_icon.c demo_app.c)
-    target_link_libraries(lvgl-app lvgl lvgl::examples lvgl::demos lvgl::thorvg ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES} ${Libdrm_LIBRARIES} m pthread)
+    add_executable(lvgl-com main.c mouse_cursor_icon.c demo_app.c)
+    target_link_libraries(lvgl-com lvgl lvgl::examples lvgl::demos lvgl::thorvg ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES} ${Libdrm_LIBRARIES} m pthread)
 
 elseif (LV_USE_SDL)
 
     find_package(SDL2)
     find_package(SDL2_image)
     include_directories(${SDL2_INCLUDE_DIRS} ${SDL2_IMAGE_INCLUDE_DIRS})
-    add_executable(lvgl-app main.c mouse_cursor_icon.c demo_app.c)
-    target_link_libraries(lvgl-app lvgl lvgl::examples lvgl::demos lvgl::thorvg ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES} m pthread)
+    add_executable(lvgl-com main.c mouse_cursor_icon.c demo_app.c)
+    target_link_libraries(lvgl-com lvgl lvgl::examples lvgl::demos lvgl::thorvg ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES} m pthread)
 
 elseif (LV_USE_WAYLAND)
 
@@ -79,18 +79,18 @@ elseif (LV_USE_WAYLAND)
     target_include_directories(lvgl PUBLIC ${PROJECT_SOURCE_DIR} ${WAYLAND_PROTOCOLS_DIR})
 
     # TODO Add option to still be able to build wl_shell
-    add_executable(lvgl-app main.c ${WAYLAND_PROTOCOLS_DIR}/wayland-xdg-shell-client-protocol.c mouse_cursor_icon.c demo_app.c)
+    add_executable(lvgl-com main.c ${WAYLAND_PROTOCOLS_DIR}/wayland-xdg-shell-client-protocol.c mouse_cursor_icon.c demo_app.c)
 
-    target_compile_definitions(lvgl-app PRIVATE LV_CONF_INCLUDE_SIMPLE)
-    target_link_libraries(lvgl-app lvgl lvgl::examples lvgl::demos lvgl::thorvg m wayland-client xkbcommon wayland-cursor)
+    target_compile_definitions(lvgl-com PRIVATE LV_CONF_INCLUDE_SIMPLE)
+    target_link_libraries(lvgl-com lvgl lvgl::examples lvgl::demos lvgl::thorvg m wayland-client xkbcommon wayland-cursor)
 
 else()
     # No specific build steps required for FBDEV
-    # add_executable(lvgl-app main.c mouse_cursor_icon.c demo_app.c)
-    # target_link_libraries(lvgl-app lvgl lvgl::examples lvgl::demos lvgl::thorvg m pthread)
+    # add_executable(lvgl-com main.c mouse_cursor_icon.c demo_app.c)
+    # target_link_libraries(lvgl-com lvgl lvgl::examples lvgl::demos lvgl::thorvg m pthread)
 
     # No specific build steps required for FBDEV
-    add_executable(lvgl-app
+    add_executable(lvgl-com
         main.c
         mouse_cursor_icon.c
         mini.c
@@ -99,12 +99,12 @@ else()
         lvgl/src/stdlib/clib/lv_string_clib.c
     )
 
-    target_include_directories(lvgl-app PRIVATE
+    target_include_directories(lvgl-com PRIVATE
         ${PROJECT_SOURCE_DIR}/lvgl/src
         ${PROJECT_SOURCE_DIR}/lvgl/src/drivers/evdev
     )
 
-    target_link_libraries(lvgl-app
+    target_link_libraries(lvgl-com
         lvgl
         #lvgl::examples
         #lvgl::demos
@@ -115,5 +115,5 @@ else()
 
 endif()
 
-add_custom_target (run COMMAND ${EXECUTABLE_OUTPUT_PATH}/lvgl-app DEPENDS lvgl-app)
-install(TARGETS lvgl-app RUNTIME DESTINATION bin)
+add_custom_target (run COMMAND ${EXECUTABLE_OUTPUT_PATH}/lvgl-com DEPENDS lvgl-com)
+install(TARGETS lvgl-com RUNTIME DESTINATION bin)

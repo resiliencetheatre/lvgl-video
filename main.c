@@ -1,5 +1,5 @@
 /*
- * lvgl-app, small user interface demo with lvgl graphics library
+ * lvgl-com, small user interface demo with lvgl graphics library
  * 
  * MIT License
  * 
@@ -625,7 +625,7 @@ const char *getenv_default(const char *name, const char *dflt)
 
 void lv_linux_disp_init(void)
 {
-    printf("lvgl-app demo for lvgl usage \n");
+    printf("lvgl-com \n");
     const char *device = getenv_default("LV_LINUX_FBDEV_DEVICE", "/dev/fb0");
     lv_display_t *disp = lv_linux_fbdev_create();
     lv_linux_fbdev_set_file(disp, device);
