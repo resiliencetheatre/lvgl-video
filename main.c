@@ -29,6 +29,10 @@
  * 
  * Disable console output:
  * echo 0 > /sys/class/vtconsole/vtcon1/bind
+ * or
+ * dmesg -n 1
+ * 
+ * Hyperpixel resolution: 800x480 pixels
  */
 #define _GNU_SOURCE
 
@@ -64,7 +68,7 @@
 
 #define FIFO_IN  "/tmp/fifo_in"
 #define FIFO_OUT "/tmp/fifo_out"
-#define BRIGHTNESS_SYSFS_PATH "/sys/devices/platform/rpi_backlight/backlight/rpi_backlight/brightness"
+#define BRIGHTNESS_SYSFS_PATH "/sys/devices/platform/backlight/backlight/backlight/brightness"
 #define FB_BLANK_PATH "/sys/class/graphics/fb0/blank"
 #define TIMEOUT_SECONDS 60
 #define NUM_SWITCHES 4
@@ -227,7 +231,7 @@ static void create_single_scale(lv_obj_t *parent,
     lv_obj_set_style_border_width(vcont, 0, 0);
     lv_obj_set_style_shadow_width(vcont, 0, 0);
     lv_obj_t *scale = lv_scale_create(vcont);
-    lv_obj_set_size(scale, 200, 200);
+    lv_obj_set_size(scale, 170, 170);
     lv_scale_set_mode(scale, LV_SCALE_MODE_ROUND_INNER);
     lv_obj_set_style_bg_opa(scale, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(scale, lv_palette_lighten(LV_PALETTE_BLUE, 3), 0);
@@ -264,7 +268,7 @@ static void create_single_scale(lv_obj_t *parent,
 void create_tx_rx_gauges(lv_obj_t *parent)
 {
     lv_obj_t *container = lv_obj_create(parent);
-    lv_obj_set_size(container, 600, 250);
+    lv_obj_set_size(container, 480, 250);
     lv_obj_center(container);
     lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
     
@@ -1046,7 +1050,7 @@ void lv_create_tab_view(void)
 
     /* Add 3 tabs (the tabs are page (lv_page) and can be scrolled */
     lv_obj_t * tab1 = lv_tabview_add_tab(tabview, "Status");
-    lv_obj_t * tab2 = lv_tabview_add_tab(tabview, "Out Of Band messaging");
+    lv_obj_t * tab2 = lv_tabview_add_tab(tabview, "Messaging");
     lv_obj_t * tab3 = lv_tabview_add_tab(tabview, "Settings");
     
     lv_tabview_set_tab_bar_size(tabview, 40);
@@ -1070,17 +1074,17 @@ void lv_create_tab_view(void)
         // Title label
         lv_obj_t * label = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-        lv_label_set_text(label, "Security router");
+        lv_label_set_text(label, "COMM Unit");
         
         // Description label
         lv_obj_t * label_desc = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_desc, &lv_font_montserrat_16, 0);
-        lv_label_set_text(label_desc, "This router separates you cryptographically from LAN segment. It prevents lateral movement \ntowards your MACSEC segment while routing your traffic to LAN and back.\n\nThere is also Out Of Band messaging solution and secure Push-To-Talk for incident\nmanagement purposes when you cannot trust your primary channels.");
+        lv_label_set_text(label_desc, "Out-of-band communication system.");
         
         // Status title label
         lv_obj_t * label_status_title = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_status_title, &lv_font_montserrat_24, 0);
-        lv_label_set_text(label_status_title, "Router status:");
+        lv_label_set_text(label_status_title, "Status:");
         
         // Get mac address of wired ethernet
         char mac[18];
@@ -1090,7 +1094,7 @@ void lv_create_tab_view(void)
             for (char *p = mac; *p; ++p) {
                 *p = toupper((unsigned char)*p);
             }
-            snprintf(mac_label_text, sizeof(mac_label_text), "Router mac address: %s (%s)", mac,interface);
+            snprintf(mac_label_text, sizeof(mac_label_text), "MAC: %s (%s)", mac,interface);
         } else {
             show_notification("Failed to get MAC address");
         }
@@ -1132,27 +1136,28 @@ void lv_create_tab_view(void)
         // Create LED #1 inside row
         macsec_keyed_led = lv_led_create(led_row);
         lv_led_off(macsec_keyed_led);
-        lv_obj_set_style_pad_all(macsec_keyed_led, 2, 0);
+        lv_obj_set_style_pad_all(macsec_keyed_led, 1, 0);
 
         // Create label next to LED
         lv_obj_t * led_label = lv_label_create(led_row);
         lv_label_set_text(led_label, "MACSEC KEYED" );
-        lv_obj_set_style_text_font(led_label, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(led_label, &lv_font_montserrat_16, 0);
         lv_obj_set_style_pad_left(led_label, 0, 0); // space between LED and text
         lv_obj_set_style_pad_right(led_label, 30, 0);
 
         // Create LED #2 inside row
         macsec_routing_led = lv_led_create(led_row);
         lv_led_off(macsec_routing_led);
-        lv_obj_set_style_pad_all(macsec_routing_led, 2, 0);
+        lv_obj_set_style_pad_all(macsec_routing_led, 1, 0);
         
         // Create label next to LED
         lv_obj_t * led_label_2 = lv_label_create(led_row);
         lv_label_set_text(led_label_2, "MACSEC " LV_SYMBOL_LOOP " LAN" );
-        lv_obj_set_style_text_font(led_label_2, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(led_label_2, &lv_font_montserrat_16, 0);
         lv_obj_set_style_pad_left(led_label_2, 0, 0); // space between LED and text
         lv_obj_set_style_pad_right(led_label_2, 30, 0);
 
+		/*
         // Create LED #3 inside row
         wifi_led = lv_led_create(led_row);
         lv_led_off(wifi_led);
@@ -1163,6 +1168,7 @@ void lv_create_tab_view(void)
         lv_label_set_text(led_label_3, "WIFI " LV_SYMBOL_WIFI );
         lv_obj_set_style_text_font(led_label_3, &lv_font_montserrat_20, 0);
         lv_obj_set_style_pad_left(led_label_3, 0, 0); // space between LED and text
+        */
         
         lv_obj_t * label_speed_title = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_speed_title, &lv_font_montserrat_24, 0);
@@ -1192,7 +1198,7 @@ void lv_create_tab_view(void)
         
         // Message log
         message_log_ta = create_message_log_view(tab2_content);
-        lv_obj_set_height(message_log_ta, 140);
+        lv_obj_set_height(message_log_ta, 380);
         lv_obj_set_style_text_font(message_log_ta, &lv_font_montserrat_16, 0);
 
         // Message entry
@@ -1208,7 +1214,7 @@ void lv_create_tab_view(void)
         
         // Create keyboard and add to the same container
         kb = lv_keyboard_create(tab2_content);
-        lv_obj_set_height(kb, LV_VER_RES / 2.5);
+        lv_obj_set_height(kb, LV_VER_RES / 3);
         lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_font(kb, &lv_font_montserrat_20, 0);
         // Link and show keyboard
