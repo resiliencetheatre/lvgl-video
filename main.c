@@ -175,6 +175,21 @@ void run_route_script(void)
     }
 }
 
+void unbind_console(void)
+{
+	int ret = system("echo 0 > /sys/class/vtconsole/vtcon1/bind");
+    if (ret == -1) {
+        LV_LOG_ERROR("Failed to unbind fb console");
+    } else {
+        int exit_status = WEXITSTATUS(ret);
+        if (exit_status == 0) {
+            LV_LOG_INFO("fb console unbind successfully");
+        } else {
+            LV_LOG_WARN("fb console unbinding exited with status %d", exit_status);
+        }
+    }
+}
+
 int get_ip_address(const char *iface_name, char *ip_out) {
     struct ifaddrs *ifaddr, *ifa;
     int found = -1;
@@ -633,7 +648,8 @@ void lv_linux_disp_init(void)
     const char *device = getenv_default("LV_LINUX_FBDEV_DEVICE", "/dev/fb0");
     lv_display_t *disp = lv_linux_fbdev_create();
     lv_linux_fbdev_set_file(disp, device);
-    lv_indev_t *touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/event1");
+    // Remember to disable HDMI's: dtoverlay=vc4-kms-v3d,nohdmi
+    lv_indev_t *touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/event0");
     lv_indev_set_display(touch, disp);
     // Add global event callback to evdev input
     lv_indev_add_event_cb(touch, global_input_event_cb, LV_EVENT_PRESSED, NULL);
@@ -1049,13 +1065,35 @@ void lv_create_tab_view(void)
     tabview = lv_tabview_create(lv_screen_active());
 
     /* Add 3 tabs (the tabs are page (lv_page) and can be scrolled */
+    lv_obj_t * tab0 = lv_tabview_add_tab(tabview, "Comm");
     lv_obj_t * tab1 = lv_tabview_add_tab(tabview, "Status");
     lv_obj_t * tab2 = lv_tabview_add_tab(tabview, "Messaging");
     lv_obj_t * tab3 = lv_tabview_add_tab(tabview, "Settings");
     
     lv_tabview_set_tab_bar_size(tabview, 40);
 
-    /* First tab */
+	/* Front tab*/
+
+		lv_obj_t * tab0_content = lv_obj_create(tab0);
+
+        lv_obj_set_style_pad_all(tab0_content, 0, 0);
+        lv_obj_set_style_pad_row(tab0_content, 0, 0);
+        lv_obj_set_style_pad_column(tab0_content, 0, 0);
+        lv_obj_set_style_border_width(tab0_content, 0, 0);
+        lv_obj_set_style_bg_opa(tab0_content, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_pad_gap(tab0_content, 10, 0);  // Spacing between rows
+        
+        lv_obj_set_size(tab0_content, lv_pct(100), lv_pct(100));
+        lv_obj_set_layout(tab0_content, LV_LAYOUT_FLEX);
+        lv_obj_set_flex_flow(tab0_content, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_scroll_dir(tab0_content, LV_DIR_VER);
+        
+        lv_obj_t * label_0 = lv_label_create(tab0_content);
+		lv_obj_set_style_text_font(label_0, &lv_font_montserrat_26, 0);
+		lv_label_set_text(label_0, "Communication Unit");
+		lv_obj_set_style_align(label_0, LV_ALIGN_TOP_MID, 0); 
+
+    /* Status tab */
     
         lv_obj_t * tab1_content = lv_obj_create(tab1);
 
@@ -1075,6 +1113,7 @@ void lv_create_tab_view(void)
         lv_obj_t * label = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
         lv_label_set_text(label, "COMM Unit");
+        lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 0);
         
         // Description label
         lv_obj_t * label_desc = lv_label_create(tab1_content);
@@ -1260,7 +1299,7 @@ void lv_create_tab_view(void)
         lv_obj_set_flex_grow(brightness_row, 0);
         
         // Brightness slider
-        lv_brightness_slider(brightness_row);
+        // lv_brightness_slider(brightness_row);
         
         // Create horizontal row container for a switch
         lv_obj_t * switch_row = lv_obj_create(tab3_content);
@@ -1460,6 +1499,8 @@ void lv_create_tab_view(void)
 
 int main(int argc, char **argv)
 {
+	/* Unbind FB console */
+	unbind_console();
     /* Initialize LVGL. */
     lv_init();
     /* Create fifo's */
