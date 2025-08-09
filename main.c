@@ -96,6 +96,9 @@ lv_obj_t *wifi_led;
 static lv_obj_t *scale_tx, *scale_rx;
 static lv_obj_t *needle_tx, *needle_rx;
 static lv_obj_t *value_label_tx, *value_label_rx;
+static lv_obj_t *bar_talk = NULL;
+static lv_obj_t *bar_disc = NULL;
+
 
 static void brightness_slider_event_callback(lv_event_t * e);
 void show_notification(const char *msg);
@@ -538,24 +541,50 @@ static void button_event_callback(lv_event_t * e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t * btn = lv_event_get_target_obj(e);
+    (void)btn; /* silence unused warning if not needed */
 
-    if(code == LV_EVENT_CLICKED) {
-        button_data_t *data = (button_data_t *)lv_event_get_user_data(e);
+    if(code != LV_EVENT_CLICKED) return;
 
-        if(data) {
-            int id = data->button_id;
+    button_data_t *data = (button_data_t *)lv_event_get_user_data(e);
+    if(!data) return;
 
-            if(id == 0) {
-                printf("Power off button\n");
-                sync();
-                system("poweroff");
-            }
-            else if(id == 1) {
-                printf("button id: 1 \n");
-            }
+    switch (data->button_id) {
+    case 0: /* Power off */
+        printf("Power off button\n");
+        sync();
+        system("poweroff");
+        break;
+
+    case 1: /* Talk */
+        printf("Talk button\n");
+
+        if (bar_talk) {
+            lv_obj_set_style_bg_color(bar_talk, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_bg_opa(bar_talk, LV_OPA_COVER, 0);
         }
+        if (bar_disc) {
+            lv_obj_set_style_bg_opa(bar_disc, LV_OPA_TRANSP, 0);
+        }
+        break;
+
+    case 2: /* Disconnect */
+        printf("Hangup button\n");
+
+        if (bar_disc) {
+            lv_obj_set_style_bg_color(bar_disc, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_bg_opa(bar_disc, LV_OPA_COVER, 0);
+        }
+        if (bar_talk) {
+            lv_obj_set_style_bg_opa(bar_talk, LV_OPA_TRANSP, 0);
+        }
+        break;
+
+    default:
+        /* no-op */
+        break;
     }
 }
+
 
 
 
@@ -1072,28 +1101,159 @@ void lv_create_tab_view(void)
     
     lv_tabview_set_tab_bar_size(tabview, 40);
 
-	/* Front tab*/
+	/* Front tab */
+	lv_obj_t *tab0_content = lv_obj_create(tab0);
 
-		lv_obj_t * tab0_content = lv_obj_create(tab0);
+	/* Base styles / layout */
+	lv_obj_set_style_pad_all(tab0_content, 0, 0);
+	lv_obj_set_style_pad_row(tab0_content, 0, 0);
+	lv_obj_set_style_pad_column(tab0_content, 0, 0);
+	lv_obj_set_style_border_width(tab0_content, 0, 0);
+	lv_obj_set_style_bg_opa(tab0_content, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_pad_gap(tab0_content, 12, 0);  // spacing between rows
+	lv_obj_set_style_pad_top(tab0_content, 32, 0); // ~ title height + margin
 
-        lv_obj_set_style_pad_all(tab0_content, 0, 0);
-        lv_obj_set_style_pad_row(tab0_content, 0, 0);
-        lv_obj_set_style_pad_column(tab0_content, 0, 0);
-        lv_obj_set_style_border_width(tab0_content, 0, 0);
-        lv_obj_set_style_bg_opa(tab0_content, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_gap(tab0_content, 10, 0);  // Spacing between rows
-        
-        lv_obj_set_size(tab0_content, lv_pct(100), lv_pct(100));
-        lv_obj_set_layout(tab0_content, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(tab0_content, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_scroll_dir(tab0_content, LV_DIR_VER);
-        
-        lv_obj_t * label_0 = lv_label_create(tab0_content);
-		lv_obj_set_style_text_font(label_0, &lv_font_montserrat_26, 0);
-		lv_label_set_text(label_0, "Communication Unit");
-		lv_obj_set_style_align(label_0, LV_ALIGN_TOP_MID, 0); 
+	lv_obj_set_size(tab0_content, lv_pct(100), lv_pct(100));
+	lv_obj_set_layout(tab0_content, LV_LAYOUT_FLEX);
+	lv_obj_set_flex_flow(tab0_content, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_scroll_dir(tab0_content, LV_DIR_VER);
 
-    /* Status tab */
+	/* Disable scrolling & hide scrollbar for whole tab */
+	lv_obj_clear_flag(tab0_content, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_scrollbar_mode(tab0_content, LV_SCROLLBAR_MODE_OFF);
+	
+	/* Title at top (PNG image, floating & top-centered) */
+	lv_obj_t *img_title = lv_image_create(tab0_content);
+
+	// From filesystem (needs LV_USE_LIBPNG=1 and lv_libpng_init()):
+	lv_image_set_src(img_title, "A:/link.png");
+
+	/* Make it float above the flex layout and pin it to top-center */
+	lv_obj_add_flag(img_title, LV_OBJ_FLAG_FLOATING);
+	lv_obj_align(img_title, LV_ALIGN_TOP_MID, 0, 6);  // same 6px offset you had
+
+	/* Optional: ensure no background/border */
+	lv_obj_set_style_bg_opa(img_title, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(img_title, 0, 0);
+
+	/* Spacer to push middle block to vertical center */
+	lv_obj_t *spacer_top = lv_obj_create(tab0_content);
+	lv_obj_set_size(spacer_top, 1, 1);
+	lv_obj_set_style_bg_opa(spacer_top, LV_OPA_TRANSP, 0);
+	lv_obj_set_flex_grow(spacer_top, 1);
+
+	/* Middle block: status + buttons */
+	lv_obj_t *middle = lv_obj_create(tab0_content);
+	lv_obj_set_style_pad_all(middle, 0, 0);
+	lv_obj_set_style_bg_opa(middle, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(middle, 0, 0);
+	lv_obj_set_layout(middle, LV_LAYOUT_FLEX);
+	lv_obj_set_flex_flow(middle, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_style_pad_gap(middle, 100, 0);  // 100 px between "ready" and the button row
+	lv_obj_set_width(middle, lv_pct(100));
+	lv_obj_center(middle);
+
+	/* Make middle grow to fit content & hide scrollbar */
+	lv_obj_set_height(middle, LV_SIZE_CONTENT);
+	lv_obj_clear_flag(middle, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_scrollbar_mode(middle, LV_SCROLLBAR_MODE_OFF);
+
+	/* Status text */
+	lv_obj_t *label_status = lv_label_create(middle);
+	lv_obj_set_style_text_font(label_status, &lv_font_montserrat_24, 0);
+	lv_label_set_text(label_status, "Ready");
+	lv_obj_set_style_text_align(label_status, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_set_width(label_status, lv_pct(100));
+	lv_obj_set_style_text_color(label_status, lv_palette_main(LV_PALETTE_BLUE), 0);
+
+	/* Button row container */
+	lv_obj_t *btn_row = lv_obj_create(middle);
+	lv_obj_set_style_pad_all(btn_row, 0, 0);
+	lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(btn_row, 0, 0);
+	lv_obj_set_layout(btn_row, LV_LAYOUT_FLEX);
+	lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+	lv_obj_set_style_pad_gap(btn_row, 20, 0);  // space between the two columns
+	lv_obj_set_width(btn_row, lv_pct(100));
+	lv_obj_center(btn_row);
+
+	/* Disable scrolling on button row */
+	lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_scrollbar_mode(btn_row, LV_SCROLLBAR_MODE_OFF);
+
+	/* ---- TALK column: button + 10px bar ---- */
+	lv_obj_t *col_talk = lv_obj_create(btn_row);
+	lv_obj_set_style_pad_all(col_talk, 0, 0);
+	lv_obj_set_style_bg_opa(col_talk, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(col_talk, 0, 0);
+	lv_obj_set_layout(col_talk, LV_LAYOUT_FLEX);
+	lv_obj_set_flex_flow(col_talk, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_style_pad_gap(col_talk, 6, 0);     // gap between button and bar
+	lv_obj_set_size(col_talk, 210, LV_SIZE_CONTENT);
+
+	/* Green "Talk" button (210x50) */
+	static button_data_t call_btn_data = { .button_id = 1, .target_screen = NULL };
+	lv_obj_t *btn_call = lv_button_create(col_talk);
+	lv_obj_set_size(btn_call, 210, 50);
+	lv_obj_add_event_cb(btn_call, button_event_callback, LV_EVENT_ALL, &call_btn_data);
+	lv_obj_set_style_bg_opa(btn_call, LV_OPA_COVER, LV_STATE_DEFAULT);
+	lv_obj_set_style_bg_color(btn_call, lv_palette_main(LV_PALETTE_GREEN), LV_STATE_DEFAULT);
+	lv_obj_set_style_radius(btn_call, 8, 0);
+	lv_obj_t *lbl_call = lv_label_create(btn_call);
+	lv_label_set_text(lbl_call, "Talk");
+	lv_obj_set_style_text_font(lbl_call, &lv_font_montserrat_24, 0);
+	lv_obj_set_style_text_color(lbl_call, lv_color_white(), 0);
+	lv_obj_center(lbl_call);
+
+	/* 10px status bar under Talk (starts invisible) */
+	bar_talk = lv_obj_create(col_talk);
+	lv_obj_set_size(bar_talk, 210, 10);
+	lv_obj_set_style_bg_opa(bar_talk, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(bar_talk, 0, 0);
+	lv_obj_set_style_radius(bar_talk, 4, 0);
+
+	/* ---- DISCONNECT column: button + 10px bar ---- */
+	lv_obj_t *col_disc = lv_obj_create(btn_row);
+	lv_obj_set_style_pad_all(col_disc, 0, 0);
+	lv_obj_set_style_bg_opa(col_disc, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(col_disc, 0, 0);
+	lv_obj_set_layout(col_disc, LV_LAYOUT_FLEX);
+	lv_obj_set_flex_flow(col_disc, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_style_pad_gap(col_disc, 6, 0);
+	lv_obj_set_size(col_disc, 210, LV_SIZE_CONTENT);
+
+	/* Red "Disconnect" button (210x50) */
+	static button_data_t hangup_btn_data = { .button_id = 2, .target_screen = NULL };
+	lv_obj_t *btn_hang = lv_button_create(col_disc);
+	lv_obj_set_size(btn_hang, 210, 50);
+	lv_obj_add_event_cb(btn_hang, button_event_callback, LV_EVENT_ALL, &hangup_btn_data);
+	lv_obj_set_style_bg_opa(btn_hang, LV_OPA_COVER, LV_STATE_DEFAULT);
+	lv_obj_set_style_bg_color(btn_hang, lv_palette_main(LV_PALETTE_RED), LV_STATE_DEFAULT);
+	lv_obj_set_style_radius(btn_hang, 8, 0);
+	lv_obj_t *lbl_hang = lv_label_create(btn_hang);
+	lv_label_set_text(lbl_hang, "Disconnect");
+	lv_obj_set_style_text_font(lbl_hang, &lv_font_montserrat_24, 0);
+	lv_obj_set_style_text_color(lbl_hang, lv_color_white(), 0);
+	lv_obj_center(lbl_hang);
+
+	/* 10px status bar under Disconnect (starts invisible) */
+	bar_disc = lv_obj_create(col_disc);
+	lv_obj_set_size(bar_disc, 210, 10);
+	lv_obj_set_style_bg_opa(bar_disc, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_width(bar_disc, 0, 0);
+	lv_obj_set_style_radius(bar_disc, 4, 0);
+
+	/* Bottom spacer to complete vertical centering */
+	lv_obj_t *spacer_bottom = lv_obj_create(tab0_content);
+	lv_obj_set_size(spacer_bottom, 1, 1);
+	lv_obj_set_style_bg_opa(spacer_bottom, LV_OPA_TRANSP, 0);
+	lv_obj_set_flex_grow(spacer_bottom, 1);
+
+
+	
+
+
+		/* Status tab */
     
         lv_obj_t * tab1_content = lv_obj_create(tab1);
 
@@ -1119,11 +1279,12 @@ void lv_create_tab_view(void)
         lv_obj_t * label_desc = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_desc, &lv_font_montserrat_16, 0);
         lv_label_set_text(label_desc, "Out-of-band communication system.");
+        lv_obj_set_style_pad_bottom(label_desc, 20, 0);
         
         // Status title label
         lv_obj_t * label_status_title = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_status_title, &lv_font_montserrat_24, 0);
-        lv_label_set_text(label_status_title, "Status:");
+        lv_label_set_text(label_status_title, "Status");
         
         // Get mac address of wired ethernet
         char mac[18];
@@ -1211,12 +1372,12 @@ void lv_create_tab_view(void)
         
         lv_obj_t * label_speed_title = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_speed_title, &lv_font_montserrat_24, 0);
-        lv_label_set_text(label_speed_title, "Network speed (macsec0):");
+        lv_label_set_text(label_speed_title, "Network meters (macsec0)");
         
         // macsec0 speed meters
         create_tx_rx_gauges(tab1_content);
 
-    /* Second tab */
+		/* Second tab */
         label = lv_label_create(tab2);
         lv_label_set_text(label, "");
         
@@ -1503,6 +1664,11 @@ int main(int argc, char **argv)
 	unbind_console();
     /* Initialize LVGL. */
     lv_init();
+
+#if LV_USE_LIBPNG
+    lv_libpng_init();
+#endif
+
     /* Create fifo's */
     fifo_init();
     /* Initialize the FBDEV */

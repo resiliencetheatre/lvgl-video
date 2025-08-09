@@ -89,6 +89,9 @@ else()
     # add_executable(lvgl-com main.c mouse_cursor_icon.c demo_app.c)
     # target_link_libraries(lvgl-com lvgl lvgl::examples lvgl::demos lvgl::thorvg m pthread)
 
+	find_package(ZLIB REQUIRED)
+	find_package(PNG  REQUIRED)
+
     # No specific build steps required for FBDEV
     add_executable(lvgl-com
         main.c
@@ -108,6 +111,8 @@ else()
         lvgl
         #lvgl::examples
         #lvgl::demos
+        PNG::PNG
+        ZLIB::ZLIB
         lvgl::thorvg
         m
         pthread
