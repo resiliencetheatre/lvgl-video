@@ -56,6 +56,11 @@
 #include <netinet/in.h>
 #include <sys/utsname.h>
 #include <sys/stat.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
 #include "mini.h"
 #include "log.h"
 #include "lvgl/lvgl.h"
@@ -66,6 +71,7 @@
 #include "lvgl/src/stdlib/lv_string.h"
 
 
+#define OTP_SOCKET_PATH "/tmp/otp_status"
 #define FIFO_IN  "/tmp/fifo_in"
 #define FIFO_OUT "/tmp/fifo_out"
 #define BRIGHTNESS_SYSFS_PATH "/sys/devices/platform/backlight/backlight/backlight/brightness"
@@ -85,6 +91,7 @@ atomic_bool backlight_off = false;
 int g_backlight_timeout=0;
 char timestamp[16];
 lv_obj_t *uptime_label = NULL;
+lv_obj_t *latency_label = NULL;
 lv_obj_t *switch_objects[NUM_SWITCHES];
 static lv_obj_t * message_log_ta = NULL;
 static lv_obj_t * slider_label;
@@ -103,6 +110,7 @@ static lv_obj_t *bar_disc = NULL;
 static void brightness_slider_event_callback(lv_event_t * e);
 void show_notification(const char *msg);
 void update_tx_rx_gauges(unsigned long tx_bps, unsigned long rx_bps);
+char *read_otp_status_parsed(void);
 
 typedef struct {
     const char *ini_key;
@@ -118,6 +126,28 @@ typedef struct {
     lv_obj_t * label;
     int switch_id;
 } switch_context_t;
+
+typedef struct {
+    lv_obj_t *label;
+    char *text;     // owns a copy
+} label_async_ctx_t;
+
+static void label_set_text_cb(void *p) {
+    label_async_ctx_t *ctx = p;
+    if (ctx->label && ctx->text) lv_label_set_text(ctx->label, ctx->text);
+    lv_free(ctx->text);
+    lv_free(ctx);
+}
+
+// Safe from ANY context that isn't the draw loop:
+static void label_set_text_safe(lv_obj_t *label, const char *txt) {
+    label_async_ctx_t *ctx = lv_malloc(sizeof(*ctx));
+    if(!ctx) return;
+    ctx->label = label;
+    ctx->text  = lv_strdup(txt ? txt : "");
+    if(!ctx->text) { lv_free(ctx); return; }
+    lv_async_call(label_set_text_cb, ctx);
+}
 
 
 int get_kernel_version(char *out, size_t out_size) {
@@ -480,9 +510,9 @@ static void update_uptime_label(void *param)
     int seconds = uptime % 60;
 
     if (days > 0) {
-        lv_label_set_text_fmt(uptime_label, "Uptime: %d days %02d:%02d:%02d", days, hours, minutes, seconds);
+        lv_label_set_text_fmt(uptime_label, "%d d %02d:%02d:%02d", days, hours, minutes, seconds);
     } else {
-        lv_label_set_text_fmt(uptime_label, "Uptime: %02d:%02d:%02d", hours, minutes, seconds);
+        lv_label_set_text_fmt(uptime_label, "%02d:%02d:%02d", hours, minutes, seconds);
     }
 }
 
@@ -530,6 +560,18 @@ void *screen_timeout_thread(void *arg)
         *uptime_copy = (int)uptime_sec;
         lv_async_call(update_uptime_label, uptime_copy);
         
+        //
+        // dpinger socket read, run dpinger:
+        //
+        // dpinger -f -s 2s -r 2s -L 10% -i otp -t 5s -C /opt/dpinger/otp-tunnel.sh -u /tmp/otp_status 10.0.0.2
+        // 
+        char *status = read_otp_status_parsed();
+		if (status) {
+			label_set_text_safe(latency_label, status);
+			free(status);
+		} else {
+			label_set_text_safe(latency_label, "");
+		}
         sleep(1);
     }
 
@@ -870,9 +912,6 @@ void lv_brightness_slider(lv_obj_t *screen)
     lv_obj_align_to(slider_label, slider, LV_ALIGN_OUT_TOP_LEFT, 0, -10);
 }
 
-
-
-
 /* Switches event handler */
 static void switch_event_handler(lv_event_t * e)
 {
@@ -1075,13 +1114,19 @@ void lv_set_system_layer(void)
     lv_style_init(&style_large);
     lv_style_set_text_font(&style_large, &lv_font_montserrat_20);
     lv_obj_add_style(label_icon, &style_large, LV_PART_MAIN);
-
     lv_obj_set_style_text_color(label_icon, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_align(label_icon, LV_ALIGN_BOTTOM_RIGHT, -4, 0);
+    lv_obj_align(label_icon, LV_ALIGN_BOTTOM_MID, -4, 0);
+    
+    // latency_label
+    latency_label = lv_label_create(lv_layer_sys());
+    lv_label_set_text(latency_label, "");  // initial text
+    lv_obj_add_style(latency_label, &style_large, LV_PART_MAIN);
+    lv_obj_set_style_text_color(latency_label, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_align(latency_label, LV_ALIGN_BOTTOM_RIGHT, 4, 0);
 
     // Add uptime label
     uptime_label = lv_label_create(lv_layer_sys());
-    lv_label_set_text(uptime_label, "Uptime: 0s");  // initial text
+    lv_label_set_text(uptime_label, "Uptime");  // initial text
     lv_obj_add_style(uptime_label, &style_large, LV_PART_MAIN);
     lv_obj_set_style_text_color(uptime_label, lv_color_hex(0x000000), LV_PART_MAIN);
     lv_obj_align(uptime_label, LV_ALIGN_BOTTOM_LEFT, 4, 0);  // bottom-left corner
@@ -1101,160 +1146,156 @@ void lv_create_tab_view(void)
     
     lv_tabview_set_tab_bar_size(tabview, 40);
 
-	/* Front tab */
-	lv_obj_t *tab0_content = lv_obj_create(tab0);
+		/* Front tab */
+		lv_obj_t *tab0_content = lv_obj_create(tab0);
 
-	/* Base styles / layout */
-	lv_obj_set_style_pad_all(tab0_content, 0, 0);
-	lv_obj_set_style_pad_row(tab0_content, 0, 0);
-	lv_obj_set_style_pad_column(tab0_content, 0, 0);
-	lv_obj_set_style_border_width(tab0_content, 0, 0);
-	lv_obj_set_style_bg_opa(tab0_content, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_pad_gap(tab0_content, 12, 0);  // spacing between rows
-	lv_obj_set_style_pad_top(tab0_content, 32, 0); // ~ title height + margin
+		/* Base styles / layout */
+		lv_obj_set_style_pad_all(tab0_content, 0, 0);
+		lv_obj_set_style_pad_row(tab0_content, 0, 0);
+		lv_obj_set_style_pad_column(tab0_content, 0, 0);
+		lv_obj_set_style_border_width(tab0_content, 0, 0);
+		lv_obj_set_style_bg_opa(tab0_content, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_pad_gap(tab0_content, 12, 0);  // spacing between rows
+		lv_obj_set_style_pad_top(tab0_content, 32, 0); // ~ title height + margin
 
-	lv_obj_set_size(tab0_content, lv_pct(100), lv_pct(100));
-	lv_obj_set_layout(tab0_content, LV_LAYOUT_FLEX);
-	lv_obj_set_flex_flow(tab0_content, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_scroll_dir(tab0_content, LV_DIR_VER);
+		lv_obj_set_size(tab0_content, lv_pct(100), lv_pct(100));
+		lv_obj_set_layout(tab0_content, LV_LAYOUT_FLEX);
+		lv_obj_set_flex_flow(tab0_content, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_scroll_dir(tab0_content, LV_DIR_VER);
 
-	/* Disable scrolling & hide scrollbar for whole tab */
-	lv_obj_clear_flag(tab0_content, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_scrollbar_mode(tab0_content, LV_SCROLLBAR_MODE_OFF);
-	
-	/* Title at top (PNG image, floating & top-centered) */
-	lv_obj_t *img_title = lv_image_create(tab0_content);
+		/* Disable scrolling & hide scrollbar for whole tab */
+		lv_obj_clear_flag(tab0_content, LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_set_scrollbar_mode(tab0_content, LV_SCROLLBAR_MODE_OFF);
+		
+		/* Title at top (PNG image, floating & top-centered) */
+		lv_obj_t *img_title = lv_image_create(tab0_content);
 
-	// From filesystem (needs LV_USE_LIBPNG=1 and lv_libpng_init()):
-	lv_image_set_src(img_title, "A:/link.png");
+		// From filesystem (needs LV_USE_LIBPNG=1 and lv_libpng_init()):
+		lv_image_set_src(img_title, "A:/link.png");
 
-	/* Make it float above the flex layout and pin it to top-center */
-	lv_obj_add_flag(img_title, LV_OBJ_FLAG_FLOATING);
-	lv_obj_align(img_title, LV_ALIGN_TOP_MID, 0, 6);  // same 6px offset you had
+		/* Make it float above the flex layout and pin it to top-center */
+		lv_obj_add_flag(img_title, LV_OBJ_FLAG_FLOATING);
+		lv_obj_align(img_title, LV_ALIGN_TOP_MID, 0, 6);  // same 6px offset you had
 
-	/* Optional: ensure no background/border */
-	lv_obj_set_style_bg_opa(img_title, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(img_title, 0, 0);
+		/* Optional: ensure no background/border */
+		lv_obj_set_style_bg_opa(img_title, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(img_title, 0, 0);
 
-	/* Spacer to push middle block to vertical center */
-	lv_obj_t *spacer_top = lv_obj_create(tab0_content);
-	lv_obj_set_size(spacer_top, 1, 1);
-	lv_obj_set_style_bg_opa(spacer_top, LV_OPA_TRANSP, 0);
-	lv_obj_set_flex_grow(spacer_top, 1);
+		/* Spacer to push middle block to vertical center */
+		lv_obj_t *spacer_top = lv_obj_create(tab0_content);
+		lv_obj_set_size(spacer_top, 1, 1);
+		lv_obj_set_style_bg_opa(spacer_top, LV_OPA_TRANSP, 0);
+		lv_obj_set_flex_grow(spacer_top, 1);
 
-	/* Middle block: status + buttons */
-	lv_obj_t *middle = lv_obj_create(tab0_content);
-	lv_obj_set_style_pad_all(middle, 0, 0);
-	lv_obj_set_style_bg_opa(middle, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(middle, 0, 0);
-	lv_obj_set_layout(middle, LV_LAYOUT_FLEX);
-	lv_obj_set_flex_flow(middle, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_style_pad_gap(middle, 100, 0);  // 100 px between "ready" and the button row
-	lv_obj_set_width(middle, lv_pct(100));
-	lv_obj_center(middle);
+		/* Middle block: status + buttons */
+		lv_obj_t *middle = lv_obj_create(tab0_content);
+		lv_obj_set_style_pad_all(middle, 0, 0);
+		lv_obj_set_style_bg_opa(middle, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(middle, 0, 0);
+		lv_obj_set_layout(middle, LV_LAYOUT_FLEX);
+		lv_obj_set_flex_flow(middle, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_style_pad_gap(middle, 100, 0);  // 100 px between "ready" and the button row
+		lv_obj_set_width(middle, lv_pct(100));
+		lv_obj_center(middle);
 
-	/* Make middle grow to fit content & hide scrollbar */
-	lv_obj_set_height(middle, LV_SIZE_CONTENT);
-	lv_obj_clear_flag(middle, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_scrollbar_mode(middle, LV_SCROLLBAR_MODE_OFF);
+		/* Make middle grow to fit content & hide scrollbar */
+		lv_obj_set_height(middle, LV_SIZE_CONTENT);
+		lv_obj_clear_flag(middle, LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_set_scrollbar_mode(middle, LV_SCROLLBAR_MODE_OFF);
 
-	/* Status text */
-	lv_obj_t *label_status = lv_label_create(middle);
-	lv_obj_set_style_text_font(label_status, &lv_font_montserrat_24, 0);
-	lv_label_set_text(label_status, "Ready");
-	lv_obj_set_style_text_align(label_status, LV_TEXT_ALIGN_CENTER, 0);
-	lv_obj_set_width(label_status, lv_pct(100));
-	lv_obj_set_style_text_color(label_status, lv_palette_main(LV_PALETTE_BLUE), 0);
+		/* Status text */
+		lv_obj_t *label_status = lv_label_create(middle);
+		lv_obj_set_style_text_font(label_status, &lv_font_montserrat_24, 0);
+		lv_label_set_text(label_status, "Ready");
+		lv_obj_set_style_text_align(label_status, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_width(label_status, lv_pct(100));
+		lv_obj_set_style_text_color(label_status, lv_palette_main(LV_PALETTE_BLUE), 0);
 
-	/* Button row container */
-	lv_obj_t *btn_row = lv_obj_create(middle);
-	lv_obj_set_style_pad_all(btn_row, 0, 0);
-	lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(btn_row, 0, 0);
-	lv_obj_set_layout(btn_row, LV_LAYOUT_FLEX);
-	lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-	lv_obj_set_style_pad_gap(btn_row, 20, 0);  // space between the two columns
-	lv_obj_set_width(btn_row, lv_pct(100));
-	lv_obj_center(btn_row);
+		/* Button row container */
+		lv_obj_t *btn_row = lv_obj_create(middle);
+		lv_obj_set_style_pad_all(btn_row, 0, 0);
+		lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(btn_row, 0, 0);
+		lv_obj_set_layout(btn_row, LV_LAYOUT_FLEX);
+		lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+		lv_obj_set_style_pad_gap(btn_row, 20, 0);  // space between the two columns
+		lv_obj_set_width(btn_row, lv_pct(100));
+		lv_obj_center(btn_row);
 
-	/* Disable scrolling on button row */
-	lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
-	lv_obj_set_scrollbar_mode(btn_row, LV_SCROLLBAR_MODE_OFF);
+		/* Disable scrolling on button row */
+		lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+		lv_obj_set_scrollbar_mode(btn_row, LV_SCROLLBAR_MODE_OFF);
 
-	/* ---- TALK column: button + 10px bar ---- */
-	lv_obj_t *col_talk = lv_obj_create(btn_row);
-	lv_obj_set_style_pad_all(col_talk, 0, 0);
-	lv_obj_set_style_bg_opa(col_talk, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(col_talk, 0, 0);
-	lv_obj_set_layout(col_talk, LV_LAYOUT_FLEX);
-	lv_obj_set_flex_flow(col_talk, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_style_pad_gap(col_talk, 6, 0);     // gap between button and bar
-	lv_obj_set_size(col_talk, 210, LV_SIZE_CONTENT);
+		/* ---- TALK column: button + 10px bar ---- */
+		lv_obj_t *col_talk = lv_obj_create(btn_row);
+		lv_obj_set_style_pad_all(col_talk, 0, 0);
+		lv_obj_set_style_bg_opa(col_talk, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(col_talk, 0, 0);
+		lv_obj_set_layout(col_talk, LV_LAYOUT_FLEX);
+		lv_obj_set_flex_flow(col_talk, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_style_pad_gap(col_talk, 6, 0);     // gap between button and bar
+		lv_obj_set_size(col_talk, 210, LV_SIZE_CONTENT);
 
-	/* Green "Talk" button (210x50) */
-	static button_data_t call_btn_data = { .button_id = 1, .target_screen = NULL };
-	lv_obj_t *btn_call = lv_button_create(col_talk);
-	lv_obj_set_size(btn_call, 210, 50);
-	lv_obj_add_event_cb(btn_call, button_event_callback, LV_EVENT_ALL, &call_btn_data);
-	lv_obj_set_style_bg_opa(btn_call, LV_OPA_COVER, LV_STATE_DEFAULT);
-	lv_obj_set_style_bg_color(btn_call, lv_palette_main(LV_PALETTE_GREEN), LV_STATE_DEFAULT);
-	lv_obj_set_style_radius(btn_call, 8, 0);
-	lv_obj_t *lbl_call = lv_label_create(btn_call);
-	lv_label_set_text(lbl_call, "Talk");
-	lv_obj_set_style_text_font(lbl_call, &lv_font_montserrat_24, 0);
-	lv_obj_set_style_text_color(lbl_call, lv_color_white(), 0);
-	lv_obj_center(lbl_call);
+		/* Green "Talk" button (210x50) */
+		static button_data_t call_btn_data = { .button_id = 1, .target_screen = NULL };
+		lv_obj_t *btn_call = lv_button_create(col_talk);
+		lv_obj_set_size(btn_call, 210, 50);
+		lv_obj_add_event_cb(btn_call, button_event_callback, LV_EVENT_ALL, &call_btn_data);
+		lv_obj_set_style_bg_opa(btn_call, LV_OPA_COVER, LV_STATE_DEFAULT);
+		lv_obj_set_style_bg_color(btn_call, lv_palette_main(LV_PALETTE_GREEN), LV_STATE_DEFAULT);
+		lv_obj_set_style_radius(btn_call, 8, 0);
+		lv_obj_t *lbl_call = lv_label_create(btn_call);
+		lv_label_set_text(lbl_call, "Talk");
+		lv_obj_set_style_text_font(lbl_call, &lv_font_montserrat_24, 0);
+		lv_obj_set_style_text_color(lbl_call, lv_color_white(), 0);
+		lv_obj_center(lbl_call);
 
-	/* 10px status bar under Talk (starts invisible) */
-	bar_talk = lv_obj_create(col_talk);
-	lv_obj_set_size(bar_talk, 210, 10);
-	lv_obj_set_style_bg_opa(bar_talk, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(bar_talk, 0, 0);
-	lv_obj_set_style_radius(bar_talk, 4, 0);
+		/* 10px status bar under Talk (starts invisible) */
+		bar_talk = lv_obj_create(col_talk);
+		lv_obj_set_size(bar_talk, 210, 10);
+		lv_obj_set_style_bg_opa(bar_talk, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(bar_talk, 0, 0);
+		lv_obj_set_style_radius(bar_talk, 4, 0);
 
-	/* ---- DISCONNECT column: button + 10px bar ---- */
-	lv_obj_t *col_disc = lv_obj_create(btn_row);
-	lv_obj_set_style_pad_all(col_disc, 0, 0);
-	lv_obj_set_style_bg_opa(col_disc, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(col_disc, 0, 0);
-	lv_obj_set_layout(col_disc, LV_LAYOUT_FLEX);
-	lv_obj_set_flex_flow(col_disc, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_style_pad_gap(col_disc, 6, 0);
-	lv_obj_set_size(col_disc, 210, LV_SIZE_CONTENT);
+		/* ---- DISCONNECT column: button + 10px bar ---- */
+		lv_obj_t *col_disc = lv_obj_create(btn_row);
+		lv_obj_set_style_pad_all(col_disc, 0, 0);
+		lv_obj_set_style_bg_opa(col_disc, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(col_disc, 0, 0);
+		lv_obj_set_layout(col_disc, LV_LAYOUT_FLEX);
+		lv_obj_set_flex_flow(col_disc, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_style_pad_gap(col_disc, 6, 0);
+		lv_obj_set_size(col_disc, 210, LV_SIZE_CONTENT);
 
-	/* Red "Disconnect" button (210x50) */
-	static button_data_t hangup_btn_data = { .button_id = 2, .target_screen = NULL };
-	lv_obj_t *btn_hang = lv_button_create(col_disc);
-	lv_obj_set_size(btn_hang, 210, 50);
-	lv_obj_add_event_cb(btn_hang, button_event_callback, LV_EVENT_ALL, &hangup_btn_data);
-	lv_obj_set_style_bg_opa(btn_hang, LV_OPA_COVER, LV_STATE_DEFAULT);
-	lv_obj_set_style_bg_color(btn_hang, lv_palette_main(LV_PALETTE_RED), LV_STATE_DEFAULT);
-	lv_obj_set_style_radius(btn_hang, 8, 0);
-	lv_obj_t *lbl_hang = lv_label_create(btn_hang);
-	lv_label_set_text(lbl_hang, "Disconnect");
-	lv_obj_set_style_text_font(lbl_hang, &lv_font_montserrat_24, 0);
-	lv_obj_set_style_text_color(lbl_hang, lv_color_white(), 0);
-	lv_obj_center(lbl_hang);
+		/* Red "Disconnect" button (210x50) */
+		static button_data_t hangup_btn_data = { .button_id = 2, .target_screen = NULL };
+		lv_obj_t *btn_hang = lv_button_create(col_disc);
+		lv_obj_set_size(btn_hang, 210, 50);
+		lv_obj_add_event_cb(btn_hang, button_event_callback, LV_EVENT_ALL, &hangup_btn_data);
+		lv_obj_set_style_bg_opa(btn_hang, LV_OPA_COVER, LV_STATE_DEFAULT);
+		lv_obj_set_style_bg_color(btn_hang, lv_palette_main(LV_PALETTE_RED), LV_STATE_DEFAULT);
+		lv_obj_set_style_radius(btn_hang, 8, 0);
+		lv_obj_t *lbl_hang = lv_label_create(btn_hang);
+		lv_label_set_text(lbl_hang, "Disconnect");
+		lv_obj_set_style_text_font(lbl_hang, &lv_font_montserrat_24, 0);
+		lv_obj_set_style_text_color(lbl_hang, lv_color_white(), 0);
+		lv_obj_center(lbl_hang);
 
-	/* 10px status bar under Disconnect (starts invisible) */
-	bar_disc = lv_obj_create(col_disc);
-	lv_obj_set_size(bar_disc, 210, 10);
-	lv_obj_set_style_bg_opa(bar_disc, LV_OPA_TRANSP, 0);
-	lv_obj_set_style_border_width(bar_disc, 0, 0);
-	lv_obj_set_style_radius(bar_disc, 4, 0);
+		/* 10px status bar under Disconnect (starts invisible) */
+		bar_disc = lv_obj_create(col_disc);
+		lv_obj_set_size(bar_disc, 210, 10);
+		lv_obj_set_style_bg_opa(bar_disc, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(bar_disc, 0, 0);
+		lv_obj_set_style_radius(bar_disc, 4, 0);
 
-	/* Bottom spacer to complete vertical centering */
-	lv_obj_t *spacer_bottom = lv_obj_create(tab0_content);
-	lv_obj_set_size(spacer_bottom, 1, 1);
-	lv_obj_set_style_bg_opa(spacer_bottom, LV_OPA_TRANSP, 0);
-	lv_obj_set_flex_grow(spacer_bottom, 1);
-
-
-	
+		/* Bottom spacer to complete vertical centering */
+		lv_obj_t *spacer_bottom = lv_obj_create(tab0_content);
+		lv_obj_set_size(spacer_bottom, 1, 1);
+		lv_obj_set_style_bg_opa(spacer_bottom, LV_OPA_TRANSP, 0);
+		lv_obj_set_flex_grow(spacer_bottom, 1);
 
 
-		/* Status tab */
-    
+		/* Status tab */    
         lv_obj_t * tab1_content = lv_obj_create(tab1);
 
         lv_obj_set_style_pad_all(tab1_content, 0, 0);
@@ -1438,7 +1479,6 @@ void lv_create_tab_view(void)
         lv_obj_set_style_pad_row(tab3_content, 15, 0);
         lv_obj_set_style_border_width(tab3_content, 0, 0);
         lv_obj_set_style_bg_opa(tab3_content, LV_OPA_TRANSP, 0);
-    
     
         // Device settings title
         lv_obj_t * label_device_settings_title = lv_label_create(tab3_content);
@@ -1658,17 +1698,180 @@ void lv_create_tab_view(void)
 }
 
 
+
+
+static int connect_unix_stream_with_timeout(const char *path, int timeout_ms) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        perror("socket(AF_UNIX,SOCK_STREAM)");
+        return -1;
+    }
+
+    // Non-blocking connect if timeout requested
+    int flags = -1;
+    if (timeout_ms > 0) {
+        flags = fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        if (!(timeout_ms > 0 && errno == EINPROGRESS)) {
+            perror("connect");
+            close(fd);
+            return -1;
+        }
+        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+        int pr = poll(&pfd, 1, timeout_ms);
+        if (pr != 1 || !(pfd.revents & POLLOUT)) {
+            if (pr == 0) fprintf(stderr, "connect timeout\n");
+            else perror("poll(connect)");
+            close(fd);
+            return -1;
+        }
+        int err = 0; socklen_t elen = sizeof(err);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) < 0 || err) {
+            errno = err ? err : errno;
+            perror("connect SO_ERROR");
+            close(fd);
+            return -1;
+        }
+        if (flags >= 0) fcntl(fd, F_SETFL, flags); // restore blocking
+    }
+
+    return fd;
+}
+
+// Returns malloc'd "Latency: X.XXX ms, Dev: Y.YYY ms, Loss: Z.Z%"
+// or NULL on error. Caller must free().
+char *read_otp_status_parsed(void) {
+    int fd = -1;
+    struct sockaddr_un addr;
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { perror("socket"); return NULL; }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, OTP_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("connect");
+        close(fd);
+        return NULL;
+    }
+
+    // Wait up to 1s for data
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    int pr = poll(&pfd, 1, 1000);
+    if (pr != 1 || !(pfd.revents & POLLIN)) {
+        if (pr == 0) fprintf(stderr, "poll: timeout waiting for data\n");
+        else perror("poll");
+        close(fd);
+        return NULL;
+    }
+
+    char buf[512];
+    size_t len = 0;
+    char *out = NULL;
+    int header_checked = 0;
+
+    for (;;) {
+        ssize_t n = read(fd, buf + len, sizeof(buf) - 1 - len);
+        if (n > 0) {
+            len += (size_t)n;
+            buf[len] = '\0';
+
+            // Skip optional header "latency dev loss"
+            if (!header_checked) {
+                char *nl = strchr(buf, '\n');
+                if (nl && strncmp(buf, "latency", 7) == 0) {
+                    size_t rem = len - (size_t)(nl + 1 - buf);
+                    memmove(buf, nl + 1, rem);
+                    len = rem;
+                    buf[len] = '\0';
+                }
+                header_checked = 1;
+            }
+
+            // Parse first complete line
+            char *nl = strchr(buf, '\n');
+            if (nl) *nl = '\0';
+
+            // Try: "<lat_us> <dev_us> <loss>"
+            double lat_us=0, dev_us=0, loss=0;
+            if (sscanf(buf, "%lf %lf %lf", &lat_us, &dev_us, &loss) != 3) {
+                // Try: "<name> <lat_us> <dev_us> <loss>"
+                char name[128];
+                if (sscanf(buf, "%127s %lf %lf %lf", name, &lat_us, &dev_us, &loss) != 4) {
+                    fprintf(stderr, "parse error: '%s'\n", buf);
+                    break;
+                }
+            }
+
+            double lat_ms = lat_us / 1000.0;
+            double dev_ms = dev_us / 1000.0;
+
+            /*if (asprintf(&out, "Latency: %.3f ms, Dev: %.3f ms, Loss: %.1f%%",lat_ms, dev_ms, loss) < 0) {
+                out = NULL;
+            }*/
+            if (asprintf(&out, "%.0f ms (%.1f%%)",lat_ms,loss) < 0) {
+                out = NULL;
+            }
+            
+            break;
+        } else if (n == 0) {
+            // EOF before newline – try parsing whatever we have
+            buf[len] = '\0';
+            double lat_us=0, dev_us=0, loss=0;
+            if (sscanf(buf, "%lf %lf %lf", &lat_us, &dev_us, &loss) != 3) {
+                char name[128];
+                if (sscanf(buf, "%127s %lf %lf %lf", name, &lat_us, &dev_us, &loss) != 4) {
+                    fprintf(stderr, "unexpected EOF with buffer: '%s'\n", buf);
+                    break;
+                }
+            }
+            double lat_ms = lat_us / 1000.0;
+            double dev_ms = dev_us / 1000.0;
+            
+            /*if (asprintf(&out, "Latency: %.3f ms, Dev: %.3f ms, Loss: %.1f%%",lat_ms, dev_ms, loss) < 0) {
+                out = NULL;
+            }*/
+            if (asprintf(&out, "%.0f ms (%.1f%%)",lat_ms,loss) < 0) {
+                out = NULL;
+            }
+            
+            break;
+        } else {
+            if (errno == EINTR) continue;
+            perror("read");
+            break;
+        }
+    }
+
+    close(fd);
+    return out;
+}
+
+
+
+
+
+
 int main(int argc, char **argv)
 {
 	/* Unbind FB console */
 	unbind_console();
     /* Initialize LVGL. */
     lv_init();
-
+	/* Initialize PNG library */
 #if LV_USE_LIBPNG
     lv_libpng_init();
 #endif
-
     /* Create fifo's */
     fifo_init();
     /* Initialize the FBDEV */
@@ -1680,7 +1883,7 @@ int main(int argc, char **argv)
     
     /* fifo thread */
     pthread_t fifo_thread;
-    pthread_create(&fifo_thread, NULL, fifo_reader_thread, NULL);
+    // pthread_create(&fifo_thread, NULL, fifo_reader_thread, NULL);
     
     /* Screen timeout thread */
     atomic_store(&last_touch_time, time(NULL));
@@ -1689,7 +1892,7 @@ int main(int argc, char **argv)
     
     /* macsec0 speed monitor */
     pthread_t netmon_thread;
-    pthread_create(&netmon_thread, NULL, network_monitoring_thread, NULL);
+    // pthread_create(&netmon_thread, NULL, network_monitoring_thread, NULL);
 
     /* timer handler for examples */
     while (1)
