@@ -59,7 +59,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <unistd.h>
+#include <stdbool.h>
 
 #include "mini.h"
 #include "log.h"
@@ -85,6 +85,7 @@
 #define RX_PATH "/sys/class/net/macsec0/statistics/rx_bytes"
 #define TX_PATH "/sys/class/net/macsec0/statistics/tx_bytes"
 #define SCALE_MAX_MBIT 100  // 100 Mbit/s
+#define SHOW_MACSEC_METERS 0
 
 atomic_long last_touch_time;
 atomic_bool backlight_off = false;
@@ -92,6 +93,8 @@ int g_backlight_timeout=0;
 char timestamp[16];
 lv_obj_t *uptime_label = NULL;
 lv_obj_t *latency_label = NULL;
+lv_obj_t *label_status = NULL;
+lv_obj_t *label_icon = NULL;
 lv_obj_t *switch_objects[NUM_SWITCHES];
 static lv_obj_t * message_log_ta = NULL;
 static lv_obj_t * slider_label;
@@ -138,6 +141,30 @@ static void label_set_text_cb(void *p) {
     lv_free(ctx->text);
     lv_free(ctx);
 }
+
+bool is_usb_mounted(void) {
+    FILE *fp = fopen("/proc/self/mountinfo", "r");
+    if (!fp) return false;
+
+    char line[512];
+    bool mounted = false;
+
+    while (fgets(line, sizeof(line), fp)) {
+        char mountpoint[256], fstype[64];
+
+        // mountpoint is field 5, fstype is after " - " separator (field 9)
+        // Example: ... /mnt/usb ... - ext2 /dev/sda1 ...
+        if (sscanf(line, "%*s %*s %*s %*s %255s %*s %*s - %63s", mountpoint, fstype) == 2) {
+            if (strcmp(mountpoint, "/mnt/usb") == 0 && strcmp(fstype, "autofs") != 0) {
+                mounted = true;
+                break;
+            }
+        }
+    }
+    fclose(fp);
+    return mounted;
+}
+
 
 // Safe from ANY context that isn't the draw loop:
 static void label_set_text_safe(lv_obj_t *label, const char *txt) {
@@ -572,6 +599,18 @@ void *screen_timeout_thread(void *arg)
 		} else {
 			label_set_text_safe(latency_label, "");
 		}
+		
+		// Check USB mount -> label_status
+		if (is_usb_mounted()) {
+            label_set_text_safe(label_status, "Ready");
+            label_set_text_safe(label_icon, LV_SYMBOL_USB);
+        } else {
+            label_set_text_safe(label_status, "Insert USB");
+            label_set_text_safe(label_icon, "");
+            
+        }
+		
+		// Sleep
         sleep(1);
     }
 
@@ -1106,9 +1145,9 @@ void lv_set_system_layer(void)
 {
     lv_obj_set_style_bg_color(lv_layer_sys(), lv_color_hex(0x003a57), LV_PART_MAIN);
 
-    // Envelope icon (existing)
-    lv_obj_t *label_icon = lv_label_create(lv_layer_sys());
-    lv_label_set_text(label_icon, LV_SYMBOL_ENVELOPE);
+    // Envelope icon (existing) LV_SYMBOL_USB LV_SYMBOL_ENVELOPE
+    label_icon = lv_label_create(lv_layer_sys());
+    lv_label_set_text(label_icon, LV_SYMBOL_USB);
 
     static lv_style_t style_large;
     lv_style_init(&style_large);
@@ -1204,7 +1243,8 @@ void lv_create_tab_view(void)
 		lv_obj_set_scrollbar_mode(middle, LV_SCROLLBAR_MODE_OFF);
 
 		/* Status text */
-		lv_obj_t *label_status = lv_label_create(middle);
+		// lv_obj_t *label_status = lv_label_create(middle);
+		label_status = lv_label_create(middle);
 		lv_obj_set_style_text_font(label_status, &lv_font_montserrat_24, 0);
 		lv_label_set_text(label_status, "Ready");
 		lv_obj_set_style_text_align(label_status, LV_TEXT_ALIGN_CENTER, 0);
@@ -1313,7 +1353,7 @@ void lv_create_tab_view(void)
         // Title label
         lv_obj_t * label = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-        lv_label_set_text(label, "COMM Unit");
+        lv_label_set_text(label, "LINK Unit");
         lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 0);
         
         // Description label
@@ -1326,7 +1366,7 @@ void lv_create_tab_view(void)
         lv_obj_t * label_status_title = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_status_title, &lv_font_montserrat_24, 0);
         lv_label_set_text(label_status_title, "Status");
-        
+ 
         // Get mac address of wired ethernet
         char mac[18];
         char mac_label_text[64];
@@ -1343,11 +1383,11 @@ void lv_create_tab_view(void)
         lv_obj_set_style_text_font(label_status_mac_address, &lv_font_montserrat_20, 0);
         lv_label_set_text(label_status_mac_address, mac_label_text);
         
-        // update macsec0 ip and macsec_keyed_led from update_macsec_ip_cb()
+        // update macsec0 IP and macsec_keyed_led from update_macsec_ip_cb()
         label_status_macsec_ip_address = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_status_macsec_ip_address, &lv_font_montserrat_20, 0);
         lv_label_set_text(label_status_macsec_ip_address, "Waiting IP address for macsec0 interface");
-        
+
         // kernel version
         lv_obj_t * label_status_kernel_version = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_status_kernel_version, &lv_font_montserrat_16, 0);
@@ -1410,18 +1450,17 @@ void lv_create_tab_view(void)
         lv_obj_set_style_text_font(led_label_3, &lv_font_montserrat_20, 0);
         lv_obj_set_style_pad_left(led_label_3, 0, 0); // space between LED and text
         */
-        
+
+#if SHOW_MACSEC_METERS
         lv_obj_t * label_speed_title = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_speed_title, &lv_font_montserrat_24, 0);
         lv_label_set_text(label_speed_title, "Network meters (macsec0)");
-        
-        // macsec0 speed meters
         create_tx_rx_gauges(tab1_content);
+#endif
 
 		/* Second tab */
         label = lv_label_create(tab2);
         lv_label_set_text(label, "");
-        
         lv_obj_t * tab2_content = lv_obj_create(tab2);
         
         // Remove padding from the flex container
@@ -1815,11 +1854,8 @@ char *read_otp_status_parsed(void) {
 
             double lat_ms = lat_us / 1000.0;
             double dev_ms = dev_us / 1000.0;
-
-            /*if (asprintf(&out, "Latency: %.3f ms, Dev: %.3f ms, Loss: %.1f%%",lat_ms, dev_ms, loss) < 0) {
-                out = NULL;
-            }*/
-            if (asprintf(&out, "%.0f ms (%.1f%%)",lat_ms,loss) < 0) {
+            // latency & loss
+            if (asprintf(&out, "%.2f ms (%.1f%%) ",lat_ms,loss) < 0) {
                 out = NULL;
             }
             
@@ -1837,11 +1873,8 @@ char *read_otp_status_parsed(void) {
             }
             double lat_ms = lat_us / 1000.0;
             double dev_ms = dev_us / 1000.0;
-            
-            /*if (asprintf(&out, "Latency: %.3f ms, Dev: %.3f ms, Loss: %.1f%%",lat_ms, dev_ms, loss) < 0) {
-                out = NULL;
-            }*/
-            if (asprintf(&out, "%.0f ms (%.1f%%)",lat_ms,loss) < 0) {
+            // latency & loss
+            if (asprintf(&out, "%.2f ms (%.1f%%) ",lat_ms,loss) < 0) {
                 out = NULL;
             }
             
@@ -1852,7 +1885,6 @@ char *read_otp_status_parsed(void) {
             break;
         }
     }
-
     close(fd);
     return out;
 }
