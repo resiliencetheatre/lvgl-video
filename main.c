@@ -85,7 +85,7 @@
 #define RX_PATH "/sys/class/net/macsec0/statistics/rx_bytes"
 #define TX_PATH "/sys/class/net/macsec0/statistics/tx_bytes"
 #define SCALE_MAX_MBIT 100  // 100 Mbit/s
-#define SHOW_MACSEC_METERS 0
+#define MACSEC_METERS_ENABLED 0
 
 atomic_long last_touch_time;
 atomic_bool backlight_off = false;
@@ -95,6 +95,7 @@ lv_obj_t *uptime_label = NULL;
 lv_obj_t *latency_label = NULL;
 lv_obj_t *label_status = NULL;
 lv_obj_t *label_icon = NULL;
+lv_obj_t *btn_ejec = NULL;
 lv_obj_t *switch_objects[NUM_SWITCHES];
 static lv_obj_t * message_log_ta = NULL;
 static lv_obj_t * slider_label;
@@ -604,10 +605,13 @@ void *screen_timeout_thread(void *arg)
 		if (is_usb_mounted()) {
             label_set_text_safe(label_status, "Ready");
             label_set_text_safe(label_icon, LV_SYMBOL_USB);
+            // Show Eject button
+			lv_obj_clear_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);
         } else {
             label_set_text_safe(label_status, "Insert USB");
             label_set_text_safe(label_icon, "");
-            
+            // Hide Eject button
+			lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);   
         }
 		
 		// Sleep
@@ -658,6 +662,10 @@ static void button_event_callback(lv_event_t * e)
         if (bar_talk) {
             lv_obj_set_style_bg_opa(bar_talk, LV_OPA_TRANSP, 0);
         }
+        break;
+    case 3: /* USB eject and button hide */
+        printf("USB Eject\n");
+        system("systemctl start usb-eject.target");
         break;
 
     default:
@@ -1214,7 +1222,7 @@ void lv_create_tab_view(void)
 
 		/* Make it float above the flex layout and pin it to top-center */
 		lv_obj_add_flag(img_title, LV_OBJ_FLAG_FLOATING);
-		lv_obj_align(img_title, LV_ALIGN_TOP_MID, 0, 6);  // same 6px offset you had
+		lv_obj_align(img_title, LV_ALIGN_TOP_MID, 0, 6);
 
 		/* Optional: ensure no background/border */
 		lv_obj_set_style_bg_opa(img_title, LV_OPA_TRANSP, 0);
@@ -1334,6 +1342,30 @@ void lv_create_tab_view(void)
 		lv_obj_set_style_bg_opa(spacer_bottom, LV_OPA_TRANSP, 0);
 		lv_obj_set_flex_grow(spacer_bottom, 1);
 
+		/* Eject button */
+		/* Eject button */
+		static button_data_t eject_btn_data = { .button_id = 3, .target_screen = NULL };
+		btn_ejec = lv_button_create(tab0);  // parent = tab0, not tab0_content
+		lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_FLOATING); // ignore flex layout
+		lv_obj_align(btn_ejec, LV_ALIGN_BOTTOM_MID, 0, -20); // -6 so it moves up slightly
+		lv_obj_set_size(btn_ejec, 210, 50);
+		lv_obj_add_event_cb(btn_ejec, button_event_callback, LV_EVENT_ALL, &eject_btn_data);
+		lv_obj_set_style_bg_opa(btn_ejec, LV_OPA_COVER, LV_STATE_DEFAULT);
+		lv_obj_set_style_bg_color(btn_ejec, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_DEFAULT);
+		lv_obj_set_style_radius(btn_ejec, 8, 0);
+
+		lv_obj_t *lbl_ejec = lv_label_create(btn_ejec);
+		lv_label_set_text(lbl_ejec, "Eject USB");
+		lv_obj_set_style_text_font(lbl_ejec, &lv_font_montserrat_24, 0);
+		lv_obj_set_style_text_color(lbl_ejec, lv_color_white(), 0);
+		lv_obj_center(lbl_ejec);
+
+
+		
+
+
+
+
 
 		/* Status tab */    
         lv_obj_t * tab1_content = lv_obj_create(tab1);
@@ -1451,7 +1483,7 @@ void lv_create_tab_view(void)
         lv_obj_set_style_pad_left(led_label_3, 0, 0); // space between LED and text
         */
 
-#if SHOW_MACSEC_METERS
+#if MACSEC_METERS_ENABLED
         lv_obj_t * label_speed_title = lv_label_create(tab1_content);
         lv_obj_set_style_text_font(label_speed_title, &lv_font_montserrat_24, 0);
         lv_label_set_text(label_speed_title, "Network meters (macsec0)");
@@ -1922,9 +1954,11 @@ int main(int argc, char **argv)
     pthread_t timeout_thread;
     pthread_create(&timeout_thread, NULL, screen_timeout_thread, NULL);
     
-    /* macsec0 speed monitor */
+    /* macsec0 speed monitor, unused at com variant */
+#if MACSEC_METERS_ENABLED
     pthread_t netmon_thread;
-    // pthread_create(&netmon_thread, NULL, network_monitoring_thread, NULL);
+    pthread_create(&netmon_thread, NULL, network_monitoring_thread, NULL);
+#endif
 
     /* timer handler for examples */
     while (1)
