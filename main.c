@@ -110,7 +110,6 @@ static lv_obj_t *value_label_tx, *value_label_rx;
 static lv_obj_t *bar_talk = NULL;
 static lv_obj_t *bar_disc = NULL;
 
-
 static void brightness_slider_event_callback(lv_event_t * e);
 void show_notification(const char *msg);
 void update_tx_rx_gauges(unsigned long tx_bps, unsigned long rx_bps);
@@ -135,6 +134,50 @@ typedef struct {
     lv_obj_t *label;
     char *text;     // owns a copy
 } label_async_ctx_t;
+
+
+typedef struct {
+    bool show;
+} btn_eject_vis_req_t;
+
+static void btn_eject_set_visibility_cb(void *user_data)
+{
+    btn_eject_vis_req_t *r = (btn_eject_vis_req_t *)user_data;
+
+    // If the button might be deleted/recreated, guard it:
+#if LVGL_VERSION_MAJOR >= 9
+    if (!btn_ejec || !lv_obj_is_valid(btn_ejec)) { lv_free(r); return; }
+#else
+    if (!btn_ejec /* || !lv_obj_is_valid(btn_ejec) if available */) { lv_mem_free(r); return; }
+#endif
+
+    if (r->show) {
+        lv_obj_clear_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);
+    }
+
+#if LVGL_VERSION_MAJOR >= 9
+    lv_free(r);
+#else
+    lv_mem_free(r);
+#endif
+}
+
+static inline void btn_eject_set_visible_safe(bool show)
+{
+#if LVGL_VERSION_MAJOR >= 9
+    btn_eject_vis_req_t *r = lv_malloc(sizeof(*r));
+#else
+    btn_eject_vis_req_t *r = lv_mem_alloc(sizeof(*r));
+#endif
+    if (!r) return;
+    r->show = show;
+    lv_async_call(btn_eject_set_visibility_cb, r);
+}
+
+
+
 
 static void label_set_text_cb(void *p) {
     label_async_ctx_t *ctx = p;
@@ -599,17 +642,17 @@ void *screen_timeout_thread(void *arg)
 		
 		// Check USB mount -> label_status and eject button visibility
 		// NOTE: Should we preserve state or allow continious setting?
-		if (is_usb_mounted()) {
-            label_set_text_safe(label_status, "Ready");
-            label_set_text_safe(label_icon, LV_SYMBOL_USB);
-			lv_obj_clear_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            label_set_text_safe(label_status, "Insert USB");
-            label_set_text_safe(label_icon, "");
-			lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);   
-        }
 		
-		// Sleep
+			if (is_usb_mounted()) {
+				label_set_text_safe(label_status, "Ready");
+				label_set_text_safe(label_icon, LV_SYMBOL_USB);
+				btn_eject_set_visible_safe(true);
+			} else {
+				label_set_text_safe(label_status, "Insert USB");
+				label_set_text_safe(label_icon, "");
+				btn_eject_set_visible_safe(false);
+			}
+		
         sleep(1);
     }
 
@@ -660,7 +703,6 @@ static void button_event_callback(lv_event_t * e)
         break;
     
     case 3: /* USB eject */
-        printf("USB Eject\n");
         system("systemctl start usb-eject.target");
         break;
 
@@ -758,7 +800,7 @@ const char *getenv_default(const char *name, const char *dflt)
 
 void lv_linux_disp_init(void)
 {
-    printf("lvgl-com \n");
+    printf("lvgl-com v0.1 \n");
     const char *device = getenv_default("LV_LINUX_FBDEV_DEVICE", "/dev/fb0");
     lv_display_t *disp = lv_linux_fbdev_create();
     lv_linux_fbdev_set_file(disp, device);
