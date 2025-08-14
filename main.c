@@ -588,11 +588,7 @@ void *screen_timeout_thread(void *arg)
         *uptime_copy = (int)uptime_sec;
         lv_async_call(update_uptime_label, uptime_copy);
         
-        //
-        // dpinger socket read, run dpinger:
-        //
-        // dpinger -f -s 2s -r 2s -L 10% -i otp -t 5s -C /opt/dpinger/otp-tunnel.sh -u /tmp/otp_status 10.0.0.2
-        // 
+        // dpinger socket read
         char *status = read_otp_status_parsed();
 		if (status) {
 			label_set_text_safe(latency_label, status);
@@ -601,16 +597,15 @@ void *screen_timeout_thread(void *arg)
 			label_set_text_safe(latency_label, "");
 		}
 		
-		// Check USB mount -> label_status
+		// Check USB mount -> label_status and eject button visibility
+		// NOTE: Should we preserve state or allow continious setting?
 		if (is_usb_mounted()) {
             label_set_text_safe(label_status, "Ready");
             label_set_text_safe(label_icon, LV_SYMBOL_USB);
-            // Show Eject button
 			lv_obj_clear_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);
         } else {
             label_set_text_safe(label_status, "Insert USB");
             label_set_text_safe(label_icon, "");
-            // Hide Eject button
 			lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);   
         }
 		
@@ -663,7 +658,8 @@ static void button_event_callback(lv_event_t * e)
             lv_obj_set_style_bg_opa(bar_talk, LV_OPA_TRANSP, 0);
         }
         break;
-    case 3: /* USB eject and button hide */
+    
+    case 3: /* USB eject */
         printf("USB Eject\n");
         system("systemctl start usb-eject.target");
         break;
@@ -1763,6 +1759,15 @@ void lv_create_tab_view(void)
 
     // Set start tab
     lv_tabview_set_active(tabview, 0, LV_ANIM_OFF);
+    
+    // Initial disconnect state 
+    if (bar_disc) {
+		lv_obj_set_style_bg_color(bar_disc, lv_palette_main(LV_PALETTE_RED), 0);
+		lv_obj_set_style_bg_opa(bar_disc, LV_OPA_COVER, 0);
+	}
+	if (bar_talk) {
+		lv_obj_set_style_bg_opa(bar_talk, LV_OPA_TRANSP, 0);
+	}
     
     // Start polling IP address for macsec0
     lv_timer_create(update_macsec_ip_cb, 1000, NULL);
