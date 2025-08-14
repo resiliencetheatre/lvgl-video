@@ -1339,7 +1339,6 @@ void lv_create_tab_view(void)
 		lv_obj_set_flex_grow(spacer_bottom, 1);
 
 		/* Eject button */
-		/* Eject button */
 		static button_data_t eject_btn_data = { .button_id = 3, .target_screen = NULL };
 		btn_ejec = lv_button_create(tab0);  // parent = tab0, not tab0_content
 		lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_FLOATING); // ignore flex layout
@@ -1355,7 +1354,8 @@ void lv_create_tab_view(void)
 		lv_obj_set_style_text_font(lbl_ejec, &lv_font_montserrat_24, 0);
 		lv_obj_set_style_text_color(lbl_ejec, lv_color_white(), 0);
 		lv_obj_center(lbl_ejec);
-
+		// Initial hide of eject button
+		lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);
 
 		
 
