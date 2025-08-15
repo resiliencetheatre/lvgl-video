@@ -813,7 +813,7 @@ void lv_linux_disp_init(void)
     lv_display_t *disp = lv_linux_fbdev_create();
     lv_linux_fbdev_set_file(disp, device);
     // Remember to disable HDMI's: dtoverlay=vc4-kms-v3d,nohdmi
-    lv_indev_t *touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/event0");
+    lv_indev_t *touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/touchscreen");
     lv_indev_set_display(touch, disp);
     // Add global event callback to evdev input
     lv_indev_add_event_cb(touch, global_input_event_cb, LV_EVENT_PRESSED, NULL);
