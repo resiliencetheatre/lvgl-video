@@ -86,10 +86,12 @@
 #define TX_PATH "/sys/class/net/macsec0/statistics/tx_bytes"
 #define SCALE_MAX_MBIT 100  // 100 Mbit/s
 #define MACSEC_METERS_ENABLED 0
+#define MESSAGING_ENABLED 0
 
 atomic_long last_touch_time;
 atomic_bool backlight_off = false;
 int g_backlight_timeout=0;
+int g_audio_active=0;
 char timestamp[16];
 lv_obj_t *uptime_label = NULL;
 lv_obj_t *latency_label = NULL;
@@ -114,6 +116,7 @@ static void brightness_slider_event_callback(lv_event_t * e);
 void show_notification(const char *msg);
 void update_tx_rx_gauges(unsigned long tx_bps, unsigned long rx_bps);
 char *read_otp_status_parsed(void);
+
 
 typedef struct {
     const char *ini_key;
@@ -644,7 +647,8 @@ void *screen_timeout_thread(void *arg)
 		// NOTE: Should we preserve state or allow continious setting?
 		
 			if (is_usb_mounted()) {
-				label_set_text_safe(label_status, "Ready");
+				if(!g_audio_active)
+					label_set_text_safe(label_status, "Ready");
 				label_set_text_safe(label_icon, LV_SYMBOL_USB);
 				btn_eject_set_visible_safe(true);
 			} else {
@@ -680,7 +684,9 @@ static void button_event_callback(lv_event_t * e)
 
     case 1: /* Talk */
         printf("Talk button\n");
-
+		system("systemctl start audiostreamer");
+		label_set_text_safe(label_status, LV_SYMBOL_VOLUME_MAX " Audio active" );
+		g_audio_active=1;
         if (bar_talk) {
             lv_obj_set_style_bg_color(bar_talk, lv_palette_main(LV_PALETTE_GREEN), 0);
             lv_obj_set_style_bg_opa(bar_talk, LV_OPA_COVER, 0);
@@ -692,7 +698,9 @@ static void button_event_callback(lv_event_t * e)
 
     case 2: /* Disconnect */
         printf("Hangup button\n");
-
+		system("systemctl stop audiostreamer");
+		label_set_text_safe(label_status, "Ready");
+		g_audio_active=0;
         if (bar_disc) {
             lv_obj_set_style_bg_color(bar_disc, lv_palette_main(LV_PALETTE_RED), 0);
             lv_obj_set_style_bg_opa(bar_disc, LV_OPA_COVER, 0);
@@ -1226,7 +1234,9 @@ void lv_create_tab_view(void)
     /* Add 3 tabs (the tabs are page (lv_page) and can be scrolled */
     lv_obj_t * tab0 = lv_tabview_add_tab(tabview, "Comm");
     lv_obj_t * tab1 = lv_tabview_add_tab(tabview, "Status");
+#if MESSAGING_ENABLED
     lv_obj_t * tab2 = lv_tabview_add_tab(tabview, "Messaging");
+#endif
     lv_obj_t * tab3 = lv_tabview_add_tab(tabview, "Settings");
     
     lv_tabview_set_tab_bar_size(tabview, 40);
@@ -1528,7 +1538,8 @@ void lv_create_tab_view(void)
         create_tx_rx_gauges(tab1_content);
 #endif
 
-		/* Second tab */
+		/* Messaging tab */
+#if MESSAGING_ENABLED
         label = lv_label_create(tab2);
         lv_label_set_text(label, "");
         lv_obj_t * tab2_content = lv_obj_create(tab2);
@@ -1576,8 +1587,9 @@ void lv_create_tab_view(void)
         lv_obj_set_style_border_width(text_ta, 1, 0);
         lv_obj_set_style_pad_all(kb, 0, 0);
         lv_obj_set_style_border_width(kb, 0, 0);
+#endif
 
-    /* Third tab */
+		/* Settings tab */
         
         lv_obj_t * tab3_content = lv_obj_create(tab3);
         lv_obj_set_size(tab3_content, lv_pct(100), lv_pct(100));
@@ -1993,9 +2005,11 @@ int main(int argc, char **argv)
     lv_set_system_layer();
     
     /* fifo thread */
+#if MESSAGING_ENABLED
     pthread_t fifo_thread;
-    // pthread_create(&fifo_thread, NULL, fifo_reader_thread, NULL);
-    
+    pthread_create(&fifo_thread, NULL, fifo_reader_thread, NULL);
+#endif
+
     /* Screen timeout thread */
     atomic_store(&last_touch_time, time(NULL));
     pthread_t timeout_thread;
