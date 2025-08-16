@@ -1,5 +1,7 @@
 /*
- * lvgl-com, small user interface demo with lvgl graphics library
+ * lvgl-com, small user interface demo with lvgl graphics library.
+ * 
+ * Lot of this is co-developed with various AI tools. So be aware!
  * 
  * MIT License
  * 
@@ -22,7 +24,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- * 
  * 
  * Includes ini library from https://github.com/univrsal/mini.c
  * * BSD-2-Clause license
@@ -87,7 +88,11 @@
 #define SCALE_MAX_MBIT 100  // 100 Mbit/s
 #define MACSEC_METERS_ENABLED 0
 #define MESSAGING_ENABLED 0
+#define RX_PIPE "/tmp/rx-key-presentage"
+#define TX_PIPE "/tmp/tx-key-presentage"
 
+static int fd_rx = -1, fd_tx = -1;
+static char last_rx[128] = "-", last_tx[128] = "-";
 atomic_long last_touch_time;
 atomic_bool backlight_off = false;
 int g_backlight_timeout=0;
@@ -98,6 +103,8 @@ lv_obj_t *latency_label = NULL;
 lv_obj_t *label_status = NULL;
 lv_obj_t *label_icon = NULL;
 lv_obj_t *btn_ejec = NULL;
+lv_obj_t *otp_key_status_label = NULL;
+
 lv_obj_t *switch_objects[NUM_SWITCHES];
 static lv_obj_t * message_log_ta = NULL;
 static lv_obj_t * slider_label;
@@ -138,10 +145,131 @@ typedef struct {
     char *text;     // owns a copy
 } label_async_ctx_t;
 
-
 typedef struct {
     bool show;
 } btn_eject_vis_req_t;
+
+static void trim(char *s){ if(!s) return; size_t n=strlen(s);
+    while(n && isspace((unsigned char)s[n-1])) s[--n]='\0';
+    size_t i=0; while(s[i]&&isspace((unsigned char)s[i])) i++;
+    if(i) memmove(s,s+i,n-i+1);
+}
+static int ensure_open(const char *path, int *pfd){
+    if(*pfd>=0) return 0;
+    int fd=open(path, O_RDWR|O_NONBLOCK|O_CLOEXEC);
+    if(fd<0) return -1;
+    *pfd=fd; return 0;
+}
+static int read_available(int fd, char *buf, size_t bufsz){
+    size_t off=0;
+    for(;;){
+        ssize_t n=read(fd, buf+off, (off<bufsz? bufsz-1-off : 0));
+        if(n>0){ off+= (size_t)n; if(off>=bufsz-1) break; continue; }
+        if(n==0) break;
+        if(n<0 && (errno==EAGAIN||errno==EWOULDBLOCK)) break;
+        if(n<0 && errno==EINTR) continue;
+        break;
+    }
+    buf[off]='\0'; trim(buf);
+    return (int)off;
+}
+static void maybe_reopen_on_hup(struct pollfd *pfd, const char *path){
+    if(pfd->revents & (POLLHUP|POLLERR|POLLNVAL)){
+        if(pfd->fd>=0){ close(pfd->fd); pfd->fd=-1; }
+        // Try to reopen; if it fails now, next call will retry.
+        int fd=open(path, O_RDWR|O_NONBLOCK|O_CLOEXEC);
+        if(fd>=0) pfd->fd=fd;
+    }
+}
+
+/**
+ * Blocks up to timeout_ms (or -1 forever). Coalesces arrivals within window_ms
+ * to combine RX+TX updates. Writes formatted string to 'out'.
+ * Returns true if it produced something; false only if FIFOs missing.
+ *
+ * Behavior:
+ *  - If neither pipe delivers data within timeout -> returns snapshot "last_rx / last_tx"
+ *  - If one pipe updates -> emits "new / last_other"
+ *  - Never emits "-/-" unless truly nothing has ever been seen.
+ */
+bool read_keys_presentage_coalesced(char *out, size_t out_sz,
+                                    int timeout_ms, int window_ms)
+{
+    if(!out || out_sz<4) return false;
+
+    struct stat sr, st;
+    if(stat(RX_PIPE,&sr)!=0 || !S_ISFIFO(sr.st_mode)) return false;
+    if(stat(TX_PIPE,&st)!=0 || !S_ISFIFO(st.st_mode)) return false;
+
+    if(ensure_open(RX_PIPE,&fd_rx)<0) return false;
+    if(ensure_open(TX_PIPE,&fd_tx)<0) return false;
+
+    // Prepare poll fds
+    struct pollfd pfds[2] = {
+        { .fd = fd_rx, .events = POLLIN },
+        { .fd = fd_tx, .events = POLLIN },
+    };
+
+    // First drain any pending bytes (catch up)
+    char rxbuf[128]="", txbuf[128]="";
+    bool got_rx = read_available(fd_rx, rxbuf, sizeof rxbuf) > 0;
+    bool got_tx = read_available(fd_tx, txbuf, sizeof txbuf) > 0;
+    if(got_rx){ strncpy(last_rx, rxbuf[0]?rxbuf:"-", sizeof last_rx); last_rx[sizeof last_rx-1]='\0'; }
+    if(got_tx){ strncpy(last_tx, txbuf[0]?txbuf:"-", sizeof last_tx); last_tx[sizeof last_tx-1]='\0'; }
+
+    // If nothing pending, wait up to timeout_ms for first arrival
+    if(!got_rx && !got_tx){
+        int pr=poll(pfds, 2, timeout_ms);
+        if(pr>0){
+            if(pfds[0].revents & POLLIN){
+                if(read_available(fd_rx, rxbuf, sizeof rxbuf)>0){
+                    strncpy(last_rx, rxbuf[0]?rxbuf:"-", sizeof last_rx);
+                    last_rx[sizeof last_rx-1]='\0';
+                    got_rx=true;
+                }
+            }
+            if(pfds[1].revents & POLLIN){
+                if(read_available(fd_tx, txbuf, sizeof txbuf)>0){
+                    strncpy(last_tx, txbuf[0]?txbuf:"-", sizeof last_tx);
+                    last_tx[sizeof last_tx-1]='\0';
+                    got_tx=true;
+                }
+            }
+            maybe_reopen_on_hup(&pfds[0], RX_PIPE);
+            maybe_reopen_on_hup(&pfds[1], TX_PIPE);
+        } /* pr==0 timeout -> fall through and emit snapshot */
+    }
+
+    // If *one* pipe just updated, give the other a short window to follow
+    if(window_ms>0 && ((got_rx && !got_tx) || (!got_rx && got_tx))){
+        int idx_wait = got_rx ? 1 : 0; // wait for the other one
+        struct pollfd one = { .fd = (idx_wait==0? fd_rx: fd_tx), .events = POLLIN };
+        int pr=poll(&one, 1, window_ms);
+        if(pr>0 && (one.revents & POLLIN)){
+            if(idx_wait==0){
+                if(read_available(fd_rx, rxbuf, sizeof rxbuf)>0){
+                    strncpy(last_rx, rxbuf[0]?rxbuf:"-", sizeof last_rx);
+                    last_rx[sizeof last_rx-1]='\0';
+                }
+            }else{
+                if(read_available(fd_tx, txbuf, sizeof txbuf)>0){
+                    strncpy(last_tx, txbuf[0]?txbuf:"-", sizeof last_tx);
+                    last_tx[sizeof last_tx-1]='\0';
+                }
+            }
+        }
+    }
+
+    // Emit snapshot (never blocks here)
+    snprintf(out, out_sz, "%s / %s", last_rx[0]?last_rx:"-", last_tx[0]?last_tx:"-");
+    return true;
+}
+
+void read_keys_presentage_close(void){
+    if(fd_rx>=0){ close(fd_rx); fd_rx=-1; }
+    if(fd_tx>=0){ close(fd_tx); fd_tx=-1; }
+}
+
 
 static void btn_eject_set_visibility_cb(void *user_data)
 {
@@ -222,7 +350,6 @@ static void label_set_text_safe(lv_obj_t *label, const char *txt) {
     if(!ctx->text) { lv_free(ctx); return; }
     lv_async_call(label_set_text_cb, ctx);
 }
-
 
 int get_kernel_version(char *out, size_t out_size) {
     struct utsname uts;
@@ -590,6 +717,21 @@ static void update_uptime_label(void *param)
     }
 }
 
+void *keystatus_read_thread(void *arg)
+{
+	char buf[256];
+	while(1) {
+		// Wait up to 5s for first update, then give the other pipe 50ms to “catch up”
+        if(!read_keys_presentage_coalesced(buf, sizeof buf, 5000, 50)){
+            // FIFOs missing -> back off a bit
+            usleep(200*1000);
+            continue;
+        }		
+		char *dup = strdup(buf);
+		label_set_text_safe(otp_key_status_label, dup);
+		sleep(1);
+	}
+}
 
 void *screen_timeout_thread(void *arg)
 {
@@ -645,17 +787,16 @@ void *screen_timeout_thread(void *arg)
 		
 		// Check USB mount -> label_status and eject button visibility
 		// NOTE: Should we preserve state or allow continious setting?
-		
-			if (is_usb_mounted()) {
-				if(!g_audio_active)
-					label_set_text_safe(label_status, "Ready");
-				label_set_text_safe(label_icon, LV_SYMBOL_USB);
-				btn_eject_set_visible_safe(true);
-			} else {
-				label_set_text_safe(label_status, "Insert USB");
-				label_set_text_safe(label_icon, "");
-				btn_eject_set_visible_safe(false);
-			}
+		if (is_usb_mounted()) {
+			if(!g_audio_active)
+				label_set_text_safe(label_status, "Ready");
+			label_set_text_safe(label_icon, LV_SYMBOL_USB);
+			btn_eject_set_visible_safe(true);
+		} else {
+			label_set_text_safe(label_status, "Insert USB");
+			label_set_text_safe(label_icon, "");
+			btn_eject_set_visible_safe(false);
+		}
 		
         sleep(1);
     }
@@ -696,8 +837,8 @@ static void button_event_callback(lv_event_t * e)
         }
         break;
 
-    case 2: /* Disconnect */
-        printf("Hangup button\n");
+    case 2: /* Mute */
+        printf("Mute button\n");
 		system("systemctl stop audiostreamer");
 		label_set_text_safe(label_status, "Ready");
 		g_audio_active=0;
@@ -719,9 +860,6 @@ static void button_event_callback(lv_event_t * e)
         break;
     }
 }
-
-
-
 
 // FIFO functions
 void fifo_init(void)
@@ -1289,7 +1427,7 @@ void lv_create_tab_view(void)
 		lv_obj_set_style_border_width(middle, 0, 0);
 		lv_obj_set_layout(middle, LV_LAYOUT_FLEX);
 		lv_obj_set_flex_flow(middle, LV_FLEX_FLOW_COLUMN);
-		lv_obj_set_style_pad_gap(middle, 100, 0);  // 100 px between "ready" and the button row
+		lv_obj_set_style_pad_gap(middle, 30, 0);  // 100 px between "ready" and the button row
 		lv_obj_set_width(middle, lv_pct(100));
 		lv_obj_center(middle);
 
@@ -1299,13 +1437,39 @@ void lv_create_tab_view(void)
 		lv_obj_set_scrollbar_mode(middle, LV_SCROLLBAR_MODE_OFF);
 
 		/* Status text */
-		// lv_obj_t *label_status = lv_label_create(middle);
 		label_status = lv_label_create(middle);
 		lv_obj_set_style_text_font(label_status, &lv_font_montserrat_24, 0);
 		lv_label_set_text(label_status, "Ready");
 		lv_obj_set_style_text_align(label_status, LV_TEXT_ALIGN_CENTER, 0);
 		lv_obj_set_width(label_status, lv_pct(100));
 		lv_obj_set_style_text_color(label_status, lv_palette_main(LV_PALETTE_BLUE), 0);
+		
+		/* OTP container */
+		lv_obj_t *otp_container = lv_obj_create(middle);
+		lv_obj_set_style_pad_all(otp_container, 0, 0);
+		lv_obj_set_style_bg_opa(otp_container, LV_OPA_TRANSP, 0);
+		lv_obj_set_style_border_width(otp_container, 0, 0);
+		lv_obj_set_layout(otp_container, LV_LAYOUT_FLEX);
+		lv_obj_set_flex_flow(otp_container, LV_FLEX_FLOW_COLUMN);
+		lv_obj_set_style_pad_gap(otp_container, 5, 0);  // smaller gap
+		lv_obj_set_width(otp_container, lv_pct(100));
+		lv_obj_clear_flag(otp_container, LV_OBJ_FLAG_SCROLLABLE);
+
+		/* OTP status */
+		otp_key_status_label = lv_label_create(otp_container);
+		lv_obj_set_style_text_font(otp_key_status_label, &lv_font_montserrat_24, 0);
+		lv_label_set_text(otp_key_status_label, "");
+		lv_obj_set_style_text_align(otp_key_status_label, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_width(otp_key_status_label, lv_pct(100));
+		lv_obj_set_style_text_color(otp_key_status_label, lv_palette_main(LV_PALETTE_BLUE), 0);
+
+		/* OTP title */
+		lv_obj_t *otp_key_status_title_label = lv_label_create(otp_container);
+		lv_obj_set_style_text_font(otp_key_status_title_label, &lv_font_montserrat_16, 0);
+		lv_label_set_text(otp_key_status_title_label, "key usage");
+		lv_obj_set_style_text_align(otp_key_status_title_label, LV_TEXT_ALIGN_CENTER, 0);
+		lv_obj_set_width(otp_key_status_title_label, lv_pct(100));
+		lv_obj_set_style_text_color(otp_key_status_title_label, lv_palette_main(LV_PALETTE_BLUE), 0);
 
 		/* Button row container */
 		lv_obj_t *btn_row = lv_obj_create(middle);
@@ -1353,7 +1517,7 @@ void lv_create_tab_view(void)
 		lv_obj_set_style_border_width(bar_talk, 0, 0);
 		lv_obj_set_style_radius(bar_talk, 4, 0);
 
-		/* ---- DISCONNECT column: button + 10px bar ---- */
+		/* ---- MUTE column: button + 10px bar ---- */
 		lv_obj_t *col_disc = lv_obj_create(btn_row);
 		lv_obj_set_style_pad_all(col_disc, 0, 0);
 		lv_obj_set_style_bg_opa(col_disc, LV_OPA_TRANSP, 0);
@@ -1363,7 +1527,7 @@ void lv_create_tab_view(void)
 		lv_obj_set_style_pad_gap(col_disc, 6, 0);
 		lv_obj_set_size(col_disc, 210, LV_SIZE_CONTENT);
 
-		/* Red "Disconnect" button (210x50) */
+		/* Red "Mute" button (210x50) */
 		static button_data_t hangup_btn_data = { .button_id = 2, .target_screen = NULL };
 		lv_obj_t *btn_hang = lv_button_create(col_disc);
 		lv_obj_set_size(btn_hang, 210, 50);
@@ -1372,12 +1536,12 @@ void lv_create_tab_view(void)
 		lv_obj_set_style_bg_color(btn_hang, lv_palette_main(LV_PALETTE_RED), LV_STATE_DEFAULT);
 		lv_obj_set_style_radius(btn_hang, 8, 0);
 		lv_obj_t *lbl_hang = lv_label_create(btn_hang);
-		lv_label_set_text(lbl_hang, "Disconnect");
+		lv_label_set_text(lbl_hang, "Mute");
 		lv_obj_set_style_text_font(lbl_hang, &lv_font_montserrat_24, 0);
 		lv_obj_set_style_text_color(lbl_hang, lv_color_white(), 0);
 		lv_obj_center(lbl_hang);
 
-		/* 10px status bar under Disconnect (starts invisible) */
+		/* 10px status bar under Mute (starts invisible) */
 		bar_disc = lv_obj_create(col_disc);
 		lv_obj_set_size(bar_disc, 210, 10);
 		lv_obj_set_style_bg_opa(bar_disc, LV_OPA_TRANSP, 0);
@@ -1389,6 +1553,8 @@ void lv_create_tab_view(void)
 		lv_obj_set_size(spacer_bottom, 1, 1);
 		lv_obj_set_style_bg_opa(spacer_bottom, LV_OPA_TRANSP, 0);
 		lv_obj_set_flex_grow(spacer_bottom, 1);
+
+		
 
 		/* Eject button */
 		static button_data_t eject_btn_data = { .button_id = 3, .target_screen = NULL };
@@ -1814,7 +1980,7 @@ void lv_create_tab_view(void)
     // Set start tab
     lv_tabview_set_active(tabview, 0, LV_ANIM_OFF);
     
-    // Initial disconnect state 
+    // Initial Mute state 
     if (bar_disc) {
 		lv_obj_set_style_bg_color(bar_disc, lv_palette_main(LV_PALETTE_RED), 0);
 		lv_obj_set_style_bg_opa(bar_disc, LV_OPA_COVER, 0);
@@ -2014,6 +2180,10 @@ int main(int argc, char **argv)
     atomic_store(&last_touch_time, time(NULL));
     pthread_t timeout_thread;
     pthread_create(&timeout_thread, NULL, screen_timeout_thread, NULL);
+    
+    /* key status read thread */
+    pthread_t keystatus_thread;
+    pthread_create(&keystatus_thread, NULL, keystatus_read_thread, NULL);
     
     /* macsec0 speed monitor, unused at com variant */
 #if MACSEC_METERS_ENABLED
