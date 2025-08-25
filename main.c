@@ -88,6 +88,7 @@
 #define SCALE_MAX_MBIT 100  // 100 Mbit/s
 #define MACSEC_METERS_ENABLED 0
 #define MESSAGING_ENABLED 0
+#define PTT_ENABLED 0
 #define RX_PIPE "/tmp/rx-key-presentage"
 #define TX_PIPE "/tmp/tx-key-presentage"
 
@@ -1554,8 +1555,6 @@ void lv_create_tab_view(void)
 		lv_obj_set_style_bg_opa(spacer_bottom, LV_OPA_TRANSP, 0);
 		lv_obj_set_flex_grow(spacer_bottom, 1);
 
-		
-
 		/* Eject button */
 		static button_data_t eject_btn_data = { .button_id = 3, .target_screen = NULL };
 		btn_ejec = lv_button_create(tab0);  // parent = tab0, not tab0_content
@@ -1574,11 +1573,6 @@ void lv_create_tab_view(void)
 		lv_obj_center(lbl_ejec);
 		// Initial hide of eject button
 		lv_obj_add_flag(btn_ejec, LV_OBJ_FLAG_HIDDEN);
-
-		
-
-
-
 
 
 		/* Status tab */    
@@ -1807,6 +1801,7 @@ void lv_create_tab_view(void)
         lv_obj_set_height(switch_row, LV_SIZE_CONTENT);
         lv_obj_set_flex_grow(switch_row, 0);
         
+        
         // Create horizontal row container for a switch
         lv_obj_t * settings_switch_row_screen_wakeup = lv_obj_create(tab3_content);
         lv_obj_set_style_bg_opa(settings_switch_row_screen_wakeup, LV_OPA_TRANSP, 0);
@@ -1824,6 +1819,8 @@ void lv_create_tab_view(void)
         lv_add_settings_switch(settings_switch_row_screen_wakeup, "Screen wakeup on new message or\nPush-To-Talk traffic.",SWITCH_BACKLIGHT_WAKEUP);
         lv_obj_set_height(settings_switch_row_screen_wakeup, LV_SIZE_CONTENT);
         lv_obj_set_flex_grow(settings_switch_row_screen_wakeup, 0);
+        
+        
         
         // Device settings title
         lv_obj_t * label_macsec_settings_title = lv_label_create(tab3_content);
@@ -1852,13 +1849,13 @@ void lv_create_tab_view(void)
         
         // Text title label for IP address
         lv_obj_t * text_label_ip_address = lv_label_create(tab3_content);
-        lv_label_set_text(text_label_ip_address, "IP address:");
+        lv_label_set_text(text_label_ip_address, "MACSEC ip address:");
         
         // Text entry field for IP address (demo placeholder)
         lv_obj_t * text_setting_ip = lv_textarea_create(tab3_content);
         lv_textarea_set_one_line(text_setting_ip, true);
         lv_obj_set_width(text_setting_ip, lv_pct(50));
-        lv_textarea_set_placeholder_text(text_setting_ip, "IP Address");
+        lv_textarea_set_placeholder_text(text_setting_ip, "ip Address");
         // Associate context with this field
         text_context_t *ctx_ip = malloc(sizeof(text_context_t));
         ctx_ip->ini_key = "ip_address";  // unique key for this field
@@ -1883,7 +1880,7 @@ void lv_create_tab_view(void)
             lv_obj_add_event_cb(text_setting, settings_text_event_cb, LV_EVENT_ALL, kb_settings);
             lv_obj_add_event_cb(text_setting_ip, settings_text_event_cb, LV_EVENT_ALL, kb_settings);
         
-        
+#if PTT_ENABLED        
         // Push to talk settings title
         lv_obj_t * label_ptt_settings_title = lv_label_create(tab3_content);
         lv_obj_set_style_text_font(label_ptt_settings_title, &lv_font_montserrat_20, 0);
@@ -1924,7 +1921,7 @@ void lv_create_tab_view(void)
         lv_add_settings_switch(switch_row_3, "Enable Push-To-Talk\nto WAN segment",SWITCH_PTT_TO_WAN);
         lv_obj_set_height(switch_row_3, LV_SIZE_CONTENT);
         lv_obj_set_flex_grow(switch_row_3, 0);
-        
+#endif
         
         // Buttons title
         lv_obj_t * label_buttons_settings_title = lv_label_create(tab3_content);
@@ -1953,8 +1950,10 @@ void lv_create_tab_view(void)
         int backlight_timeout = mini_get_bool(ini_read, "lvgl", "backlight_timeout", 0);
         g_backlight_timeout = backlight_timeout;
         int backlight_wakeup = mini_get_bool(ini_read, "lvgl", "backlight_wakeup", 0);
+#if PTT_ENABLED
         int ptt_macsec = mini_get_bool(ini_read, "lvgl", "ptt_macsec", 0);
         int ptt_wan = mini_get_bool(ini_read, "lvgl", "ptt_wan", 0);
+#endif
         mini_free(ini_read);
         
         if (backlight_timeout)
@@ -1966,7 +1965,8 @@ void lv_create_tab_view(void)
             lv_obj_add_state(switch_objects[SWITCH_BACKLIGHT_WAKEUP], LV_STATE_CHECKED);
         else
             lv_obj_clear_state(switch_objects[SWITCH_BACKLIGHT_WAKEUP], LV_STATE_CHECKED);
-            
+
+#if PTT_ENABLED      
         if (ptt_macsec)
             lv_obj_add_state(switch_objects[SWITCH_PTT_TO_MACSEC], LV_STATE_CHECKED);
         else
@@ -1976,6 +1976,7 @@ void lv_create_tab_view(void)
             lv_obj_add_state(switch_objects[SWITCH_PTT_TO_WAN], LV_STATE_CHECKED);
         else
             lv_obj_clear_state(switch_objects[SWITCH_PTT_TO_WAN], LV_STATE_CHECKED);
+#endif
 
     // Set start tab
     lv_tabview_set_active(tabview, 0, LV_ANIM_OFF);
