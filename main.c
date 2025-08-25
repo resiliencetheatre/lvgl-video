@@ -304,11 +304,20 @@ static inline void btn_eject_set_visible_safe(bool show)
     btn_eject_vis_req_t *r = lv_mem_alloc(sizeof(*r));
 #endif
     if (!r) return;
+
     r->show = show;
-    lv_async_call(btn_eject_set_visibility_cb, r);
+
+    // Enqueue and free immediately if enqueue fails
+#if LVGL_VERSION_MAJOR >= 9
+    if (lv_async_call(btn_eject_set_visibility_cb, r) != LV_RESULT_OK) {
+        lv_free(r);
+    }
+#else
+    if (lv_async_call(btn_eject_set_visibility_cb, r) != LV_RES_OK) {
+        lv_mem_free(r);
+    }
+#endif
 }
-
-
 
 
 static void label_set_text_cb(void *p) {
@@ -322,21 +331,41 @@ bool is_usb_mounted(void) {
     FILE *fp = fopen("/proc/self/mountinfo", "r");
     if (!fp) return false;
 
-    char line[512];
     bool mounted = false;
+    char *line = NULL;
+    size_t cap = 0;
 
-    while (fgets(line, sizeof(line), fp)) {
-        char mountpoint[256], fstype[64];
+    while (!mounted && getline(&line, &cap, fp) != -1) {
+        // Split into left (fields 1..7) and right (fields 9..11) at " - "
+        char *sep = strstr(line, " - ");
+        if (!sep) continue;
+        *sep = '\0';
+        char *right = sep + 3;
 
-        // mountpoint is field 5, fstype is after " - " separator (field 9)
-        // Example: ... /mnt/usb ... - ext2 /dev/sda1 ...
-        if (sscanf(line, "%*s %*s %*s %*s %255s %*s %*s - %63s", mountpoint, fstype) == 2) {
-            if (strcmp(mountpoint, "/mnt/usb") == 0 && strcmp(fstype, "autofs") != 0) {
-                mounted = true;
-                break;
-            }
+        // ---- Left side: take 5th field (mountpoint) ----
+        char *save = NULL;
+        char *tok = strtok_r(line, " \t\n", &save);
+        int idx = 1;
+        const char *mountpoint = NULL;
+        while (tok) {
+            if (idx == 5) { mountpoint = tok; break; }
+            tok = strtok_r(NULL, " \t\n", &save);
+            idx++;
+        }
+        if (!mountpoint) continue;
+
+        // ---- Right side: first field is fstype ----
+        char *save2 = NULL;
+        char *fstype = strtok_r(right, " \t\n", &save2);
+        if (!fstype) continue;
+
+        if (strcmp(mountpoint, "/mnt/usb") == 0 && strcmp(fstype, "autofs") != 0) {
+            mounted = true;
+            break;
         }
     }
+
+    free(line);
     fclose(fp);
     return mounted;
 }
@@ -346,11 +375,24 @@ bool is_usb_mounted(void) {
 static void label_set_text_safe(lv_obj_t *label, const char *txt) {
     label_async_ctx_t *ctx = lv_malloc(sizeof(*ctx));
     if(!ctx) return;
+
     ctx->label = label;
     ctx->text  = lv_strdup(txt ? txt : "");
     if(!ctx->text) { lv_free(ctx); return; }
-    lv_async_call(label_set_text_cb, ctx);
+
+#if LVGL_VERSION_MAJOR >= 9
+    if (lv_async_call(label_set_text_cb, ctx) != LV_RESULT_OK) {
+        lv_free(ctx->text);
+        lv_free(ctx);
+    }
+#else
+    if (lv_async_call(label_set_text_cb, ctx) != LV_RES_OK) {
+        lv_free(ctx->text);
+        lv_free(ctx);
+    }
+#endif
 }
+
 
 int get_kernel_version(char *out, size_t out_size) {
     struct utsname uts;
@@ -2043,20 +2085,20 @@ static int connect_unix_stream_with_timeout(const char *path, int timeout_ms) {
     return fd;
 }
 
-// Returns malloc'd "Latency: X.XXX ms, Dev: Y.YYY ms, Loss: Z.Z%"
-// or NULL on error. Caller must free().
-char *read_otp_status_parsed(void) {
-    int fd = -1;
-    struct sockaddr_un addr;
 
-    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+// Returns malloc'd "X.XX ms (Y.Y%) " or NULL on error. Caller must free().
+char *read_otp_status_parsed(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) { perror("socket"); return NULL; }
 
+    struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, OTP_SOCKET_PATH, sizeof(addr.sun_path) - 1);
 
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    socklen_t alen = offsetof(struct sockaddr_un, sun_path)
+                   + strnlen(addr.sun_path, sizeof(addr.sun_path)) + 1;
+    if (connect(fd, (struct sockaddr*)&addr, alen) < 0) {
         perror("connect");
         close(fd);
         return NULL;
@@ -2072,85 +2114,67 @@ char *read_otp_status_parsed(void) {
         return NULL;
     }
 
-    char buf[512];
+    char  buf[512];
     size_t len = 0;
     char *out = NULL;
     int header_checked = 0;
 
     for (;;) {
-        ssize_t n = read(fd, buf + len, sizeof(buf) - 1 - len);
-        if (n > 0) {
-            len += (size_t)n;
-            buf[len] = '\0';
-
-            // Skip optional header "latency dev loss"
-            if (!header_checked) {
-                char *nl = strchr(buf, '\n');
-                if (nl && strncmp(buf, "latency", 7) == 0) {
-                    size_t rem = len - (size_t)(nl + 1 - buf);
-                    memmove(buf, nl + 1, rem);
-                    len = rem;
-                    buf[len] = '\0';
-                }
-                header_checked = 1;
-            }
-
-            // Parse first complete line
-            char *nl = strchr(buf, '\n');
-            if (nl) *nl = '\0';
-
-            // Try: "<lat_us> <dev_us> <loss>"
-            double lat_us=0, dev_us=0, loss=0;
-            if (sscanf(buf, "%lf %lf %lf", &lat_us, &dev_us, &loss) != 3) {
-                // Try: "<name> <lat_us> <dev_us> <loss>"
-                char name[128];
-                if (sscanf(buf, "%127s %lf %lf %lf", name, &lat_us, &dev_us, &loss) != 4) {
-                    fprintf(stderr, "parse error: '%s'\n", buf);
-                    break;
-                }
-            }
-
-            double lat_ms = lat_us / 1000.0;
-            double dev_ms = dev_us / 1000.0;
-            // latency & loss
-            if (asprintf(&out, "%.2f ms (%.1f%%) ",lat_ms,loss) < 0) {
-                out = NULL;
-            }
-            
-            break;
-        } else if (n == 0) {
-            // EOF before newline – try parsing whatever we have
-            buf[len] = '\0';
-            double lat_us=0, dev_us=0, loss=0;
-            if (sscanf(buf, "%lf %lf %lf", &lat_us, &dev_us, &loss) != 3) {
-                char name[128];
-                if (sscanf(buf, "%127s %lf %lf %lf", name, &lat_us, &dev_us, &loss) != 4) {
-                    fprintf(stderr, "unexpected EOF with buffer: '%s'\n", buf);
-                    break;
-                }
-            }
-            double lat_ms = lat_us / 1000.0;
-            double dev_ms = dev_us / 1000.0;
-            // latency & loss
-            if (asprintf(&out, "%.2f ms (%.1f%%) ",lat_ms,loss) < 0) {
-                out = NULL;
-            }
-            
-            break;
+        if (len >= sizeof(buf) - 1) {
+            // line too long; parse what we have
         } else {
-            if (errno == EINTR) continue;
-            perror("read");
-            break;
+            ssize_t n = read(fd, buf + len, sizeof(buf) - 1 - len);
+            if (n < 0) { if (errno == EINTR) continue; perror("read"); break; }
+            if (n == 0) { /* EOF */ }
+            len += (size_t)n;
         }
+        buf[len] = '\0';
+
+        // Skip optional "latency dev loss" header line once we have a newline
+        if (!header_checked) {
+            char *nlh = strchr(buf, '\n');
+            if (!nlh) {
+                // need a full line to decide if it's a header
+                if (len < sizeof(buf) - 1) continue;
+            } else if (strncmp(buf, "latency", 7) == 0) {
+                size_t rem = len - (size_t)(nlh + 1 - buf);
+                memmove(buf, nlh + 1, rem);
+                len = rem;
+                buf[len] = '\0';
+            }
+            header_checked = 1;
+        }
+
+        // Parse only when a full line is available or on EOF/overflow
+        char *nl = strchr(buf, '\n');
+        if (!nl && len < sizeof(buf) - 1) {
+            // Not a complete line yet; keep reading
+            continue;
+        }
+        if (nl) *nl = '\0';              // terminate first line
+
+        // Try: "<lat_us> <dev_us> <loss>"
+        double lat_us = 0.0, dev_us = 0.0, loss = 0.0;
+        int matched = sscanf(buf, "%lf %lf %lf", &lat_us, &dev_us, &loss);
+        if (matched != 3) {
+            // Try: "<name> <lat_us> <dev_us> <loss>"
+            char name[128];
+            matched = sscanf(buf, "%127s %lf %lf %lf", name, &lat_us, &dev_us, &loss);
+        }
+        if (matched == 3 || matched == 4) {
+            double lat_ms = lat_us / 1000.0;
+            // dev_ms unused; compute if you need it:
+            // double dev_ms = dev_us / 1000.0;
+            if (asprintf(&out, "%.2f ms (%.1f%%) ", lat_ms, loss) < 0) out = NULL;
+        } else {
+            fprintf(stderr, "parse error: '%s'\n", buf);
+        }
+        break;
     }
+
     close(fd);
     return out;
 }
-
-
-
-
-
 
 int main(int argc, char **argv)
 {
