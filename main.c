@@ -989,7 +989,7 @@ const char *getenv_default(const char *name, const char *dflt)
 
 void lv_linux_disp_init(void)
 {
-    printf("lvgl-com v0.1 \n");
+    printf("lvgl-com v0.1 lvgl version: %d.%d\n",LVGL_VERSION_MAJOR,LVGL_VERSION_MINOR);
     const char *device = getenv_default("LV_LINUX_FBDEV_DEVICE", "/dev/fb0");
     lv_display_t *disp = lv_linux_fbdev_create();
     lv_linux_fbdev_set_file(disp, device);
