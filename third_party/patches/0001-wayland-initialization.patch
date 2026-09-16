@@ -1,0 +1,24 @@
+--- a/src/drivers/wayland/lv_wl_window.c
++++ b/src/drivers/wayland/lv_wl_window.c
+@@ -53,7 +53,9 @@
+ lv_display_t * lv_wayland_window_create(uint32_t hor_res, uint32_t ver_res, char * title,
+                                         lv_wayland_display_close_cb_t close_cb)
+ {
+-    lv_wayland_init();
++    if(lv_wayland_init() != LV_RESULT_OK) {
++        return NULL;
++    }
+     if(close_cb) {
+         LV_LOG_WARN("'lv_wayland_display_close_cb_t' is deprecated and will be removed in the next release. Instead bind an LV_EVENT_DELETE to the display\
+ 		      Bind an LV_EVENT_DELETE to the display returned by `lv_wayland_window_create` instead.");
+--- a/src/drivers/wayland/lv_wl_xdg_shell.c
++++ b/src/drivers/wayland/lv_wl_xdg_shell.c
+@@ -146,7 +146,7 @@
+      * configure event */
+     wl_surface_commit(window->body);
+     wl_display_roundtrip(lv_wl_ctx.wl_display);
+-    LV_ASSERT_MSG(window->resize_event.pending, "Failed to receive the xdg_surface configuration event");
++    LV_ASSERT_MSG(window->resize_event.pending || window->xdg.configured, "Failed to receive the xdg_surface configuration event");
+ }
+ bool lv_wayland_xdg_is_resize_pending(lv_wl_window_t * window)
+ {
