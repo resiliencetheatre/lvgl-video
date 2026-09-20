@@ -5,7 +5,7 @@
 typedef struct {
     char *peer, *bind_address, *audio_input, *audio_output;
     int video_port, audio_port, text_port, rtp_mtu;
-    gboolean start, test_media;
+    gboolean start, test_media, disable_echo_cancellation;
 } AppOptions;
 
 gboolean app_options_parse(AppOptions *options, int *argc, char ***argv, GError **error);

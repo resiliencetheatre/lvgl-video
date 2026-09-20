@@ -4,7 +4,7 @@ Framebuffer LVGL camera preview and two-way GTK Pipe-compatible RTP/UDP calls.
 The Pi's OV5647 is captured through `libcamerasrc` at fixed **640x480, 10 fps**.
 The main picture shows received video, with a 160x120 local preview in its
 upper-right corner. LVGL alone writes the framebuffer. Microphone and speaker
-use ALSA; the application is intended for a headset.
+use ALSA, with echo cancellation enabled by default for speaker use.
 
 The three buttons mute/unmute the outgoing microphone, start media, and end the
 call. Ending a call releases camera, audio devices and media sockets. Heartbeat
@@ -12,8 +12,7 @@ and control reception stay active so the call can be restarted. Without
 `--peer`, the application retains its original local-only camera preview and
 starts automatically without opening audio or network sockets.
 
-There is no echo cancellation, smartcard integration, secure mode, quality
-slider or adaptive quality. All traffic is plaintext (unencrypted).
+There is no smartcard integration, secure mode, quality slider or adaptive quality. All traffic is plaintext (unencrypted).
 
 ## Test against GTK Pipe
 
@@ -29,7 +28,7 @@ lvgl-video --peer 192.168.1.20 --start
 On the desktop:
 
 ```sh
-gtk-pipe --peer 192.168.1.10 --disable-echo-cancellation
+gtk-pipe --peer 192.168.1.10
 ```
 
 Press **Start stream** in GTK Pipe. Omit `--start` on the Pi to start with its
@@ -42,6 +41,35 @@ scaled/letterboxed to 640x480, then fitted into the available LVGL video area.
 Use the other Pi's address in `--peer` for Pi-to-Pi calls. Ports must match on
 both ends, and the route/firewalls must permit the three UDP ports below.
 There is no signalling server or NAT traversal.
+
+### Echo cancellation
+
+Echo cancellation is enabled by default, matching GTK Pipe: microphone capture
+passes through `webrtcdsp`, using decoded playback from `webrtcechoprobe` as its
+reference. Noise suppression and a high-pass filter are enabled; automatic
+gain control is disabled. The microphone mute is applied after capture DSP.
+
+For headphones, or to compare the unprocessed audio path, disable it with:
+
+```sh
+lvgl-video --peer 192.168.1.20 --start --disable-echo-cancellation
+```
+
+GTK Pipe accepts the same `--disable-echo-cancellation` switch. Each side chooses
+its own processing independently; codecs, ports and RTP framing are unchanged.
+Local camera-only mode does not create audio or echo cancellation elements.
+
+Verify the new plugin on the Pi after installing the rebuilt image:
+
+```sh
+gst-inspect-1.0 webrtcdsp
+gst-inspect-1.0 webrtcechoprobe
+```
+
+Both elements are required in the default mode. If they are missing, the media
+pipeline reports an error; the disable flag explicitly uses the previous audio
+path. Assess echo reduction and CPU load on the actual speaker/microphone setup;
+synthetic transport tests cannot measure acoustic cancellation quality.
 
 Choose a USB headset explicitly if ALSA `default` is not the desired device:
 
@@ -104,7 +132,7 @@ matching GTK Pipe's option; audio packetization is unchanged.
 
 The package requires libcamera with its `rpi/vc4` pipeline and selects GStreamer
 app, video conversion/scaling, ALSA, audio conversion/resampling, Opus, VP8,
-RTP, RTP jitter buffering and UDP plugins. There are no GTK dependencies in the
+RTP, RTP jitter buffering, UDP and WebRTC DSP plugins. There are no GTK dependencies in the
 application. Keep `BR2_PACKAGE_LVGL_VIDEO_WAYLAND` disabled for framebuffer use.
 
 The package fetches a pinned Git revision. These working-tree changes are not
@@ -120,10 +148,16 @@ Then run from Buildroot, substituting the actual output directory:
 
 ```sh
 make O=output olddefconfig
+make O=output libvpx opus webrtc-audio-processing
+make O=output gst1-plugins-base-reconfigure
+make O=output gst1-plugins-good-reconfigure
+make O=output gst1-plugins-bad-reconfigure
 make O=output lvgl-video-rebuild all
 ```
 
-The image rebuild is needed to include the newly selected codecs/plugins.
+Existing GStreamer packages must be reconfigured after enabling new plugin
+options; Buildroot does not automatically rebuild them for configuration
+changes. The image rebuild is needed to include the newly selected codecs/plugins.
 Rebuild libcamera too if it was originally built without GStreamer support.
 Install/boot the updated image before testing. Existing startup services are
 not changed by this application update.
@@ -173,7 +207,8 @@ ctest --test-dir build-test --output-on-failure
 Override `GTK_PIPE_SOURCE_DIR` if that reference checkout is elsewhere. The test
 exchanges VP8 and Opus in both directions over loopback, renders received frames
 through an offscreen LVGL display, checks local preview, heartbeat/start/stop,
-mute and restart. Argument validation is tested separately. These tests do not
+mute and restart with echo cancellation both enabled and disabled. Argument
+validation is tested separately. These tests do not
 replace a real two-device camera/headset call.
 
 ## Source layout

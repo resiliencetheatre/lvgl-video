@@ -15,7 +15,8 @@ static void parse(const char *arguments, gboolean expected)
     AppOptions options;
     gboolean result = app_options_parse(&options, &argc, &argv, &error);
     g_assert_cmpint(result, ==, expected);
-    if (result) { g_assert_no_error(error); g_assert_cmpint(argc, ==, 1); }
+    if (result) { g_assert_no_error(error); g_assert_cmpint(argc, ==, 1);
+        g_assert_cmpint(options.disable_echo_cancellation, ==, strstr(arguments, "--disable-echo-cancellation") != NULL); }
     else g_assert_nonnull(error);
     g_clear_error(&error);
     app_options_clear(&options);
@@ -25,6 +26,7 @@ static void parse(const char *arguments, gboolean expected)
 int main(void)
 {
     parse("lvgl-video", TRUE);
+    parse("lvgl-video --peer 192.0.2.1 --disable-echo-cancellation", TRUE);
     parse("lvgl-video --peer 192.0.2.1 --bind 192.0.2.2 --rtp-mtu 1100 --start --audio-input plughw:1,0", TRUE);
     parse("lvgl-video --peer ::1 --bind ::1", TRUE);
     parse("lvgl-video --peer localhost", FALSE);

@@ -22,6 +22,11 @@ char *app_session_pipeline(const AppOptions *o)
         g_free(capture);
         return result;
     }
+    const char *capture_dsp = o->disable_echo_cancellation ? "" :
+        "webrtcdsp name=echo_cancel probe=echo_probe echo-cancel=true gain-control=false "
+        "noise-suppression=true high-pass-filter=true ! ";
+    const char *playback_probe = o->disable_echo_cancellation ? "" :
+        "webrtcechoprobe name=echo_probe ! ";
     char *input = g_strescape(o->audio_input, NULL);
     char *output = g_strescape(o->audio_output, NULL);
     char *audio_source = o->test_media ? g_strdup("audiotestsrc is-live=true volume=0.1")
@@ -36,7 +41,7 @@ char *app_session_pipeline(const AppOptions *o)
         "camera. ! " LATEST_QUEUE " ! videoscale ! video/x-raw,width=160,height=120 ! "
         "videoconvert ! video/x-raw,format=RGB16 ! appsink name=local_video " FRAME_SINK " "
         "%s ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=1 ! "
-        "volume name=microphone ! queue ! opusenc bitrate=32000 inband-fec=true ! "
+        "%svolume name=microphone ! queue ! opusenc bitrate=32000 inband-fec=true ! "
         "rtpopuspay pt=97 ! udpsink host=\"%s\" port=%d sync=false async=false "
         "udpsrc address=\"%s\" port=%d reuse=false "
         "caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=VP8,payload=96\" ! "
@@ -46,10 +51,10 @@ char *app_session_pipeline(const AppOptions *o)
         "udpsrc address=\"%s\" port=%d reuse=false "
         "caps=\"application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=97\" ! "
         "rtpjitterbuffer latency=120 drop-on-latency=true ! rtpopusdepay ! opusdec plc=true ! "
-        "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000 ! %s",
-        capture, o->rtp_mtu, o->peer, o->video_port, audio_source,
+        "audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000 ! %s%s",
+        capture, o->rtp_mtu, o->peer, o->video_port, audio_source, capture_dsp,
         o->peer, o->audio_port, o->bind_address, o->video_port,
-        o->bind_address, o->audio_port, audio_sink);
+        o->bind_address, o->audio_port, playback_probe, audio_sink);
     g_free(capture); g_free(input); g_free(output); g_free(audio_source); g_free(audio_sink);
     return result;
 }

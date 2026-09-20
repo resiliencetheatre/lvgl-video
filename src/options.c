@@ -14,6 +14,7 @@ gboolean app_options_parse(AppOptions *o, int *argc, char ***argv, GError **erro
         {"audio-input", 0, 0, G_OPTION_ARG_STRING, &o->audio_input, "ALSA capture device (default)", "DEVICE"},
         {"audio-output", 0, 0, G_OPTION_ARG_STRING, &o->audio_output, "ALSA playback device (default)", "DEVICE"},
         {"start", 0, 0, G_OPTION_ARG_NONE, &o->start, "Start media immediately in peer mode", NULL},
+        {"disable-echo-cancellation", 0, 0, G_OPTION_ARG_NONE, &o->disable_echo_cancellation, "Disable echo cancellation and capture DSP for headset use", NULL},
         {"test-media", 0, 0, G_OPTION_ARG_NONE, &o->test_media, "Use test video/tone and discard received audio", NULL},
         {NULL}
     };

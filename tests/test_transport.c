@@ -64,7 +64,8 @@ int main(int argc, char **argv)
     for (int i=0; i<3; ++i) { reserved[i] = bind_socket("127.0.0.1", 0); ports[i] = socket_port(reserved[i]); }
     for (int i=0; i<3; ++i) g_object_unref(reserved[i]);
     AppOptions options = {.peer="127.0.0.2", .bind_address="127.0.0.1", .audio_input="default", .audio_output="default",
-        .video_port=ports[0], .audio_port=ports[1], .text_port=ports[2], .rtp_mtu=1100, .test_media=TRUE};
+        .video_port=ports[0], .audio_port=ports[1], .text_port=ports[2], .rtp_mtu=1100, .test_media=TRUE,
+        .disable_echo_cancellation=argc > 1 && !strcmp(argv[1], "--disable-echo-cancellation")};
     AppSession session;
     GError *error = NULL;
     g_assert_true(app_session_init(&session, &options, &error));
@@ -79,6 +80,20 @@ int main(int argc, char **argv)
     g_usleep(10000); app_session_poll(&session);
     g_assert_cmpstr(session.text, ==, "Hello from GTK Pipe");
     g_assert_true(app_session_start(&session));
+    GstElement *dsp = gst_bin_get_by_name(GST_BIN(session.pipeline), "echo_cancel");
+    GstElement *probe = gst_bin_get_by_name(GST_BIN(session.pipeline), "echo_probe");
+    g_assert_cmpint(dsp != NULL, ==, !options.disable_echo_cancellation);
+    g_assert_cmpint(probe != NULL, ==, !options.disable_echo_cancellation);
+    if (dsp) {
+        gboolean echo, gain, noise, highpass;
+        char *probe_name = NULL;
+        g_object_get(dsp, "echo-cancel", &echo, "gain-control", &gain,
+            "noise-suppression", &noise, "high-pass-filter", &highpass,
+            "probe", &probe_name, NULL);
+        g_assert_true(echo); g_assert_false(gain); g_assert_true(noise); g_assert_true(highpass);
+        g_assert_cmpstr(probe_name, ==, "echo_probe");
+        g_free(probe_name); gst_object_unref(dsp); gst_object_unref(probe);
+    }
     GstElement *audio = gst_bin_get_by_name(GST_BIN(session.pipeline), "audio_playback");
     GstPad *pad = gst_element_get_static_pad(audio, "sink");
     gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, audio_probe, NULL, NULL);
