@@ -1,87 +1,148 @@
 # lvgl-video
 
-A single-page LVGL local camera preview for Raspberry Pi 4 and its OV5647
-Camera Module v1.3. GStreamer captures 640x480 NV12 at 10 fps through
-`libcamerasrc`, converts to RGB565, and delivers frames through `appsink`.
-LVGL fits the image into the video area while preserving its aspect ratio,
-with Mic, Camera and End call placeholder buttons below. There is no audio,
-network transport or button action yet.
+Framebuffer LVGL camera preview and two-way GTK Pipe-compatible RTP/UDP calls.
+The Pi's OV5647 is captured through `libcamerasrc` at fixed **640x480, 10 fps**.
+The main picture shows received video, with a 160x120 local preview in its
+upper-right corner. LVGL alone writes the framebuffer. Microphone and speaker
+use ALSA; the application is intended for a headset.
 
-LVGL alone writes the framebuffer. Capture runs in GStreamer's threads; the
-UI polls a one-frame appsink queue without blocking. Frames are copied into
-application-owned memory on the LVGL thread before rendering. Old queued
-frames are dropped rather than accumulating delay. Camera errors appear in
-the application log and leave an error message over the video area.
+The three buttons mute/unmute the outgoing microphone, start media, and end the
+call. Ending a call releases camera, audio devices and media sockets. Heartbeat
+and control reception stay active so the call can be restarted. Without
+`--peer`, the application retains its original local-only camera preview and
+starts automatically without opening audio or network sockets.
 
-## Source layout
+There is no echo cancellation, smartcard integration, secure mode, quality
+slider or adaptive quality. All traffic is plaintext (unencrypted).
 
-- `src/main.c`: initialization, event loop and signal handling.
-- `src/ui.c`: camera image and placeholder controls.
-- `src/camera.c`: fixed camera pipeline, frame handoff and cleanup.
-- `src/display.c`: framebuffer (default) or Wayland display and touch input.
-- `config/lv_conf.h`: application-owned LVGL configuration.
-- `third_party/`: vendored LVGL and documented patches/provenance.
+## Test against GTK Pipe
 
-The adapter uses an LVGL image with GStreamer appsink directly so camera caps
-can be specified explicitly. It does not enable LVGL's bundled generic
-GStreamer player. The pipeline follows the working capture setup documented
-in `rpi-extree/board/raspberrypi/README-videoterm-rpi4-camera.md`, at 10 fps.
-
-## Buildroot and target test
-
-`rpi-extree/package/lvgl-video` builds the sibling local `lvgl-video` directory.
-Keep libcamera and its `rpi/vc4` pipeline enabled in the existing Pi 4 camera
-configuration, and select `BR2_PACKAGE_LVGL_VIDEO=y` in menuconfig. Leave
-`BR2_PACKAGE_LVGL_VIDEO_WAYLAND` disabled for framebuffer use. The package
-selects the GStreamer parser, app and video conversion plugins; Buildroot
-also enables libcamera's GStreamer source when these packages are selected.
-
-From Buildroot, using your actual output directory:
-
-```sh
-make O=output menuconfig
-make O=output lvgl-video
-make O=output
-```
-
-For later application edits, use `make O=output lvgl-video-rebuild all`.
-Install/boot the resulting image before testing. Existing defconfigs and
-startup services still select and launch `lvgl-com`; this test does not replace
-them automatically. Over SSH or serial on the target:
+For example, Pi = `192.168.1.10`, desktop = `192.168.1.20`.
+On the Pi, stop the old framebuffer UI/getty and any process using the camera
+(such as Motion), then run over SSH or serial:
 
 ```sh
 systemctl stop lvgl-com.service getty@tty1.service
-# If Motion is running, stop it so the camera is free:
-systemctl stop motion
-/usr/bin/lvgl-video
+lvgl-video --peer 192.168.1.20 --start
 ```
 
-The preview starts automatically. Press Ctrl+C to stop and release the camera.
-Restore the old UI/console with:
+On the desktop:
+
+```sh
+gtk-pipe --peer 192.168.1.10 --disable-echo-cancellation
+```
+
+Press **Start stream** in GTK Pipe. Omit `--start` on the Pi to start with its
+Start button instead. Both ends must start media; an incoming start message
+only displays a notice, it does not activate camera/microphone automatically.
+GTK Pipe's quality controls can be left at a modest setting; lvgl-video always
+sends 640x480 at 10 fps regardless of the remote setting. Incoming video is
+scaled/letterboxed to 640x480, then fitted into the available LVGL video area.
+
+Use the other Pi's address in `--peer` for Pi-to-Pi calls. Ports must match on
+both ends, and the route/firewalls must permit the three UDP ports below.
+There is no signalling server or NAT traversal.
+
+Choose a USB headset explicitly if ALSA `default` is not the desired device:
+
+```sh
+arecord -l
+aplay -l
+lvgl-video --peer 192.168.1.20 --start \
+  --audio-input plughw:1,0 --audio-output plughw:1,0
+```
+
+`plughw:1,0` is an example; use the actual capture/playback device identifiers.
+The application does not alter mixer levels or routing. A missing camera or
+failed audio device stops the media pipeline and reports an error; correct
+the device setting and restart the application, or press Start to retry a
+transient failure.
+
+Ctrl+C stops media, notifies the peer and exits. End call sends the same stop
+notice while leaving the application open. Receiving GTK Pipe's stop notice
+also stops local media. Restore the old UI/console after exiting if needed:
 
 ```sh
 systemctl start getty@tty1.service lvgl-com.service
 ```
 
-Restart Motion too if it was previously running. Do not run a separate camera
-capture pipeline or `fbdevsink` alongside this application. For diagnostics:
+## Wire compatibility
+
+| Channel | Default UDP port | Format |
+| --- | --- | --- |
+| Video | 5000 | VP8 RTP, payload 96, clock rate 90000 |
+| Audio | 5002 | Opus RTP, payload 97, clock rate 48000 |
+| Control/text | 5004 | GTKPIPE/1 PING, PONG, STREAM_STARTED, STREAM_END, TEXT |
+
+VP8 uses a fixed 600 kbit/s target, real-time encoding and a maximum keyframe
+spacing of 30 frames. Opus uses 32 kbit/s, mono 48 kHz capture and in-band FEC;
+receive enables packet loss concealment. Both receivers use GTK Pipe's 120 ms
+RTP jitter buffer. No RTCP/session negotiation is required by this protocol.
+The remote can use a different resolution, frame rate or bitrate.
+
+Heartbeats run every two seconds, with a six-second peer-reachability timeout.
+The indicator reports control-channel reachability, not proof of media delivery.
+The last remote image is hidden after three seconds without a new frame.
+Incoming GTK Pipe text messages are printed to stderr; there is no chat editor
+in this video UI. Outgoing control messages are fully compatible with GTK Pipe.
+Video, audio and control are all unencrypted and unauthenticated.
+
+Additional options:
+
+```sh
+lvgl-video --peer 10.10.0.2 --bind 10.10.0.1 \
+  --video-port 5000 --audio-port 5002 --text-port 5004 --rtp-mtu 1100
+lvgl-video --help
+```
+
+Peer and bind addresses must be numeric IPv4 or IPv6 and use the same family.
+Without `--bind`, receivers listen on all addresses of the peer's family.
+`--rtp-mtu` limits the complete outgoing video RTP UDP payload (default 1400),
+matching GTK Pipe's option; audio packetization is unchanged.
+
+## Buildroot
+
+The package requires libcamera with its `rpi/vc4` pipeline and selects GStreamer
+app, video conversion/scaling, ALSA, audio conversion/resampling, Opus, VP8,
+RTP, RTP jitter buffering and UDP plugins. There are no GTK dependencies in the
+application. Keep `BR2_PACKAGE_LVGL_VIDEO_WAYLAND` disabled for framebuffer use.
+
+The package fetches a pinned Git revision. These working-tree changes are not
+part of that remote revision until published and the pin is updated. To test
+this local checkout now, add this line to your Buildroot output directory's
+`local.mk` (use the absolute path to your checkout):
+
+```make
+LVGL_VIDEO_OVERRIDE_SRCDIR = /home/tech/laboratory/rpi4/lvgl-video
+```
+
+Then run from Buildroot, substituting the actual output directory:
+
+```sh
+make O=output olddefconfig
+make O=output lvgl-video-rebuild all
+```
+
+The image rebuild is needed to include the newly selected codecs/plugins.
+Rebuild libcamera too if it was originally built without GStreamer support.
+Install/boot the updated image before testing. Existing startup services are
+not changed by this application update.
+
+For diagnostics on the target:
 
 ```sh
 gst-inspect-1.0 libcamerasrc
-gst-inspect-1.0 appsink
-gst-inspect-1.0 videoconvert
-GST_DEBUG=2 /usr/bin/lvgl-video
+gst-inspect-1.0 vp8enc
+gst-inspect-1.0 opusenc
+gst-inspect-1.0 alsasrc
+gst-inspect-1.0 alsasink
+GST_DEBUG=2 lvgl-video --peer 192.168.1.20 --start
 ```
 
-The framebuffer backend uses `/dev/fb0` (override with `LV_LINUX_FBDEV_DEVICE`)
-and `/dev/input/touchscreen`. Run with access to these devices. SIGINT/SIGTERM
-stop the application. No configuration file or image assets are required.
+## Native build and automated tests
 
-## Native build and test pattern
-
-Requires C/C++ compilers, CMake, pkg-config, pthreads, and GStreamer app/video
-development libraries. Runtime capture also needs libcamera's GStreamer
-plugin and the app/video conversion plugins.
+Requires C/C++ compilers, CMake, pkg-config, pthreads, GLib/GIO and GStreamer
+app/video development libraries. Runtime media needs the plugins listed above.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
@@ -89,15 +150,41 @@ cmake --build build -j
 ./build/lvgl-video
 ```
 
-For a camera-independent display test, install/enable `videotestsrc` (Buildroot
-option `BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_VIDEOTESTSRC`) and run:
+Framebuffer defaults to `/dev/fb0` (override with `LV_LINUX_FBDEV_DEVICE`),
+with touch at `/dev/input/touchscreen`. Optional Wayland builds use
+`-DLVGL_VIDEO_BACKEND=wayland` and require the Wayland client/cursor libraries,
+libxkbcommon, wayland-protocols and wayland-scanner.
+
+`--test-media` substitutes live test video/audio and discards received audio;
+it never opens the camera, microphone or speaker. It requires `videotestsrc`
+and `audiotestsrc`, which the production Buildroot package does not select.
+`LVGL_VIDEO_TEST_PATTERN=1` remains supported for video-only substitution.
+
+The native interoperability test uses the sibling `gtk-pipe` checkout's actual
+pipeline builder, substituting only hardware/display endpoints. GTK3 development
+libraries and GStreamer's clockoverlay are needed for this test, not the app:
 
 ```sh
-LVGL_VIDEO_TEST_PATTERN=1 ./build/lvgl-video
+cmake -S . -B build-test -DLVGL_VIDEO_TESTS=ON
+cmake --build build-test -j
+ctest --test-dir build-test --output-on-failure
 ```
 
-Optional Wayland builds use `-DLVGL_VIDEO_BACKEND=wayland` and additionally
-require Wayland client/cursor libraries, libxkbcommon, wayland-protocols and
-wayland-scanner. Run inside an existing compositor session.
+Override `GTK_PIPE_SOURCE_DIR` if that reference checkout is elsewhere. The test
+exchanges VP8 and Opus in both directions over loopback, renders received frames
+through an offscreen LVGL display, checks local preview, heartbeat/start/stop,
+mute and restart. Argument validation is tested separately. These tests do not
+replace a real two-device camera/headset call.
 
-The application and external tree are separate Git repositories.
+## Source layout
+
+- `src/options.c`: command-line parsing and address/port validation.
+- `src/session.c`: media pipelines, control socket, heartbeat and lifecycle.
+- `src/video.c`: nonblocking appsink-to-LVGL frame handoff, respecting stride.
+- `src/ui.c`: remote video, local preview, status and controls.
+- `src/main.c`, `src/display.c`: event loop and display backend.
+- `config/lv_conf.h`, `third_party/`: LVGL configuration and vendored source.
+
+Capture is shared between transmission and local preview; the camera is opened
+only once. Frame queues are bounded and discard old frames. LVGL receives
+stable application-owned RGB565 buffers, updated only on its main thread.
