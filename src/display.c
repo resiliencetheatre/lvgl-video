@@ -7,26 +7,26 @@
 #include "src/drivers/display/fb/lv_linux_fbdev.h"
 #endif
 
-lv_display_t *app_display_create(lv_event_cb_t activity_cb)
+lv_display_t *app_display_create(void)
 {
 #if APP_USE_WAYLAND
     /* Initial size only. XDG configure events apply the kiosk output size. */
-    lv_display_t *display = lv_wayland_window_create(720, 1560, "lvgl-com", NULL);
+    lv_display_t *display = lv_wayland_window_create(800, 480, "lvgl-video", NULL);
     if (!display) return NULL;
     lv_wayland_window_set_fullscreen(display, true);
     /* Apply any initial kiosk resize before the UI computes widget sizes. */
     lv_refr_now(display);
-    lv_indev_t *touch = lv_wayland_get_touchscreen(display);
 #else
     const char *device = getenv("LV_LINUX_FBDEV_DEVICE");
     lv_display_t *display = lv_linux_fbdev_create();
     if (!display) return NULL;
-    lv_linux_fbdev_set_file(display, device ? device : "/dev/fb0");
+    if (lv_linux_fbdev_set_file(display, device ? device : "/dev/fb0") != LV_RESULT_OK) {
+        lv_display_delete(display);
+        return NULL;
+    }
     lv_indev_t *touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, "/dev/input/touchscreen");
     if (touch) lv_indev_set_display(touch, display);
 #endif
-    if (touch && activity_cb)
-        lv_indev_add_event_cb(touch, activity_cb, LV_EVENT_PRESSED, NULL);
     return display;
 }
 

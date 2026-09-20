@@ -1,79 +1,103 @@
-# lvgl-com
+# lvgl-video
 
-LVGL communications terminal application for Linux. The default backend is a
-Wayland client for Weston kiosk; a framebuffer backend remains available for
-the original appliance target. The Wayland UI uses software-rendered shared
-memory buffers. Weston performs GPU composition. No GTK, LVGL demo application,
-GStreamer or application-side EGL integration is required for this stage.
+A single-page LVGL local camera preview for Raspberry Pi 4 and its OV5647
+Camera Module v1.3. GStreamer captures 640x480 NV12 at 10 fps through
+`libcamerasrc`, converts to RGB565, and delivers frames through `appsink`.
+LVGL fits the image into the video area while preserving its aspect ratio,
+with Mic, Camera and End call placeholder buttons below. There is no audio,
+network transport or button action yet.
+
+LVGL alone writes the framebuffer. Capture runs in GStreamer's threads; the
+UI polls a one-frame appsink queue without blocking. Frames are copied into
+application-owned memory on the LVGL thread before rendering. Old queued
+frames are dropped rather than accumulating delay. Camera errors appear in
+the application log and leave an error message over the video area.
 
 ## Source layout
 
-```text
-src/                 application UI, display adapter, INI and logging helpers
-config/lv_conf.h     application-owned LVGL configuration
-assets/              installed UI images
-cmake/Wayland.cmake   host scanner and XDG protocol generation
-third_party/lvgl/    isolated LVGL source dependency
-third_party/patches/ documented fixes to the imported snapshot
+- `src/main.c`: initialization, event loop and signal handling.
+- `src/ui.c`: camera image and placeholder controls.
+- `src/camera.c`: fixed camera pipeline, frame handoff and cleanup.
+- `src/display.c`: framebuffer (default) or Wayland display and touch input.
+- `config/lv_conf.h`: application-owned LVGL configuration.
+- `third_party/`: vendored LVGL and documented patches/provenance.
+
+The adapter uses an LVGL image with GStreamer appsink directly so camera caps
+can be specified explicitly. It does not enable LVGL's bundled generic
+GStreamer player. The pipeline follows the working capture setup documented
+in `rpi-extree/board/raspberrypi/README-videoterm-rpi4-camera.md`, at 10 fps.
+
+## Buildroot and target test
+
+`rpi-extree/package/lvgl-video` builds the sibling local `lvgl-video` directory.
+Keep libcamera and its `rpi/vc4` pipeline enabled in the existing Pi 4 camera
+configuration, and select `BR2_PACKAGE_LVGL_VIDEO=y` in menuconfig. Leave
+`BR2_PACKAGE_LVGL_VIDEO_WAYLAND` disabled for framebuffer use. The package
+selects the GStreamer parser, app and video conversion plugins; Buildroot
+also enables libcamera's GStreamer source when these packages are selected.
+
+From Buildroot, using your actual output directory:
+
+```sh
+make O=output menuconfig
+make O=output lvgl-video
+make O=output
 ```
 
-See `third_party/README.md` for provenance and the upgrade procedure. Vendor
-examples, demos, tests and unrelated integration files have been removed. LVGL
-is linked privately into the application; installation does not export its
-headers or libraries. Generated protocol files and binaries stay in the build
-directory.
+For later application edits, use `make O=output lvgl-video-rebuild all`.
+Install/boot the resulting image before testing. Existing defconfigs and
+startup services still select and launch `lvgl-com`; this test does not replace
+them automatically. Over SSH or serial on the target:
 
-## Native build
+```sh
+systemctl stop lvgl-com.service getty@tty1.service
+# If Motion is running, stop it so the camera is free:
+systemctl stop motion
+/usr/bin/lvgl-video
+```
 
-Requires a C/C++ compiler, CMake, pkg-config, pthreads, libpng/zlib, Wayland client
-and cursor libraries, libxkbcommon, wayland-protocols and a native wayland-scanner.
+The preview starts automatically. Press Ctrl+C to stop and release the camera.
+Restore the old UI/console with:
+
+```sh
+systemctl start getty@tty1.service lvgl-com.service
+```
+
+Restart Motion too if it was previously running. Do not run a separate camera
+capture pipeline or `fbdevsink` alongside this application. For diagnostics:
+
+```sh
+gst-inspect-1.0 libcamerasrc
+gst-inspect-1.0 appsink
+gst-inspect-1.0 videoconvert
+GST_DEBUG=2 /usr/bin/lvgl-video
+```
+
+The framebuffer backend uses `/dev/fb0` (override with `LV_LINUX_FBDEV_DEVICE`)
+and `/dev/input/touchscreen`. Run with access to these devices. SIGINT/SIGTERM
+stop the application. No configuration file or image assets are required.
+
+## Native build and test pattern
+
+Requires C/C++ compilers, CMake, pkg-config, pthreads, and GStreamer app/video
+development libraries. Runtime capture also needs libcamera's GStreamer
+plugin and the app/video conversion plugins.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build -j
+./build/lvgl-video
 ```
 
-For execution without installation, additionally configure
-`-DLVGL_COM_ASSET_DIR=/absolute/path/to/lvgl-com/assets`. Start the binary from a
-directory containing `lvgl.ini`; it reads and updates that file relative to its
-working directory. Optional communications/status services are separate from
-display initialization.
-
-Under an existing Wayland session, run `./build/lvgl-com`. For a framebuffer
-build use a separate directory and `-DLVGL_COM_BACKEND=fbdev`.
-
-The Wayland path uses the compositor's touch input and configured window size.
-Framebuffer console unbinding and framebuffer power controls are not used, and
-their settings are hidden. Physical brightness and idle policy remain outside
-this initial Wayland UI port.
-
-## Buildroot
-
-The external tree's `package/lvgl-com` builds this **local checkout**, not the old
-remote package revision. Select `BR2_PACKAGE_LVGL_COM=y` and
-`BR2_PACKAGE_LVGL_COM_WAYLAND=y` for Weston. The recipe supplies the host scanner
-and target protocol directory explicitly, and installs `/usr/bin/lvgl-com` and
-`/usr/share/lvgl-com/link.png`.
-
-After changing from the previous package layout, run from Buildroot:
+For a camera-independent display test, install/enable `videotestsrc` (Buildroot
+option `BR2_PACKAGE_GST1_PLUGINS_BASE_PLUGIN_VIDEOTESTSRC`) and run:
 
 ```sh
-make O=output-videoterm-weston BR2_EXTERNAL=../rpi-extree raspberrypi5_videoterm_weston_defconfig
-make O=output-videoterm-weston lvgl-com-dirclean
-make O=output-videoterm-weston
+LVGL_VIDEO_TEST_PATTERN=1 ./build/lvgl-video
 ```
 
-Use your actual output directory. A clean package build avoids old demo objects
-or cached paths surviving the source reorganization. For later local edits,
-`make O=output-videoterm-weston lvgl-com-rebuild all` resynchronizes the local
-source and regenerates the image.
+Optional Wayland builds use `-DLVGL_VIDEO_BACKEND=wayland` and additionally
+require Wayland client/cursor libraries, libxkbcommon, wayland-protocols and
+wayland-scanner. Run inside an existing compositor session.
 
-The target's `lvgl-com-wayland.service` starts after Weston signals readiness,
-uses `/opt/lvgl-com` as its working directory and connects to
-`/run/weston-kiosk/wayland-0`. The old framebuffer service stays masked. Restart
-the UI with `systemctl restart lvgl-com-wayland`; inspect its log with
-`journalctl -b -u lvgl-com-wayland`.
-
-This directory is a separate Git repository from the external Buildroot tree.
-Commit the application changes here and package/overlay changes in the parent
-repository together when publishing this port.
+The application and external tree are separate Git repositories.

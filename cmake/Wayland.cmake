@@ -19,11 +19,11 @@ add_custom_command(
     COMMAND "${WAYLAND_SCANNER_EXECUTABLE}" private-code "${protocol_xml}" "${protocol_dir}/wayland_xdg_shell.c"
     DEPENDS "${protocol_xml}"
     VERBATIM)
-add_custom_target(lvgl-com-protocols DEPENDS
+add_custom_target(lvgl-video-protocols DEPENDS
     "${protocol_dir}/wayland_xdg_shell.h" "${protocol_dir}/wayland_xdg_shell.c")
-add_dependencies(lvgl lvgl-com-protocols)
-add_library(lvgl-com-wayland-protocol STATIC "${protocol_dir}/wayland_xdg_shell.c")
-add_dependencies(lvgl-com-wayland-protocol lvgl-com-protocols)
-target_link_libraries(lvgl-com-wayland-protocol PRIVATE PkgConfig::WAYLAND)
+add_dependencies(lvgl lvgl-video-protocols)
+add_library(lvgl-video-wayland-protocol STATIC "${protocol_dir}/wayland_xdg_shell.c")
+add_dependencies(lvgl-video-wayland-protocol lvgl-video-protocols)
+target_link_libraries(lvgl-video-wayland-protocol PRIVATE PkgConfig::WAYLAND)
 target_include_directories(lvgl PRIVATE "${protocol_dir}")
-target_link_libraries(lvgl PUBLIC PkgConfig::WAYLAND lvgl-com-wayland-protocol)
+target_link_libraries(lvgl PUBLIC PkgConfig::WAYLAND lvgl-video-wayland-protocol)

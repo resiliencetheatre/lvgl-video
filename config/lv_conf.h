@@ -15,19 +15,10 @@
 #define LV_LOG_LEVEL LV_LOG_LEVEL_WARN
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
-#define LV_FONT_MONTSERRAT_20 1
-#define LV_FONT_MONTSERRAT_24 1
-#define LV_FONT_DEJAVU_16_PERSIAN_HEBREW 1
-#define LV_FONT_DEFAULT &lv_font_montserrat_14
+#define LV_FONT_DEFAULT &lv_font_montserrat_16
 
-#define LV_USE_LIBPNG 1
-#define LV_USE_FS_STDIO 1
-#define LV_FS_STDIO_LETTER 'A'
-#ifndef APP_ASSET_DIR
-#define APP_ASSET_DIR "/usr/share/lvgl-com"
-#endif
-#define LV_FS_STDIO_PATH APP_ASSET_DIR
-#define LV_FS_STDIO_CACHE_SIZE 0
+#define LV_USE_LIBPNG 0
+#define LV_USE_FS_STDIO 0
 #ifndef APP_USE_WAYLAND
 #define APP_USE_WAYLAND 1
 #endif
