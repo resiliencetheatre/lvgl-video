@@ -26,6 +26,14 @@ static void parse(const char *arguments, gboolean expected)
 int main(void)
 {
     parse("lvgl-video", TRUE);
+    parse("lvgl-video --camera internal", TRUE);
+    parse("lvgl-video --camera usb --camera-device /dev/video1", TRUE);
+    parse("lvgl-video --camera usb --camera-device /dev/v4l/by-id/usb-camera", TRUE);
+    parse("lvgl-video --camera usb", FALSE);
+    parse("lvgl-video --camera usb --camera-device video1", FALSE);
+    parse("lvgl-video --camera internal --camera-device /dev/video1", FALSE);
+    parse("lvgl-video --camera-device /dev/video1", FALSE);
+    parse("lvgl-video --camera unknown", FALSE);
     parse("lvgl-video --peer 192.0.2.1 --disable-echo-cancellation", TRUE);
     parse("lvgl-video --peer 192.0.2.1 --bind 192.0.2.2 --rtp-mtu 1100 --start --audio-input plughw:1,0", TRUE);
     parse("lvgl-video --peer ::1 --bind ::1", TRUE);

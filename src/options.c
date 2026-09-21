@@ -5,6 +5,8 @@ gboolean app_options_parse(AppOptions *o, int *argc, char ***argv, GError **erro
 {
     *o = (AppOptions){.video_port=5000, .audio_port=5002, .text_port=5004, .rtp_mtu=1400};
     GOptionEntry entries[] = {
+        {"camera", 0, 0, G_OPTION_ARG_STRING, &o->camera, "Camera source: internal (default) or usb", "SOURCE"},
+        {"camera-device", 0, 0, G_OPTION_ARG_STRING, &o->camera_device, "Required V4L2 device path with --camera usb", "PATH"},
         {"peer", 0, 0, G_OPTION_ARG_STRING, &o->peer, "Peer numeric IPv4/IPv6 address; omit for local preview", "IP"},
         {"bind", 0, 0, G_OPTION_ARG_STRING, &o->bind_address, "Local receive address", "IP"},
         {"video-port", 0, 0, G_OPTION_ARG_INT, &o->video_port, "VP8 RTP UDP port (5000)", "PORT"},
@@ -23,6 +25,15 @@ gboolean app_options_parse(AppOptions *o, int *argc, char ***argv, GError **erro
     gboolean ok = g_option_context_parse(context, argc, argv, error);
     g_option_context_free(context);
     if (!ok) return FALSE;
+    if (!o->camera) o->camera = g_strdup("internal");
+    gboolean usb = !g_strcmp0(o->camera, "usb");
+    if ((!usb && g_strcmp0(o->camera, "internal")) ||
+        (usb && (!o->camera_device || !g_path_is_absolute(o->camera_device))) ||
+        (!usb && o->camera_device)) {
+        g_set_error_literal(error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE,
+            "Use --camera internal, or --camera usb --camera-device /dev/videoN (absolute path)");
+        return FALSE;
+    }
     if (*argc != 1) goto invalid;
     if (o->video_port < 1 || o->video_port > 65535 || o->audio_port < 1 || o->audio_port > 65535 ||
         o->text_port < 1 || o->text_port > 65535 || o->video_port == o->audio_port ||
@@ -48,6 +59,7 @@ invalid:
 
 void app_options_clear(AppOptions *o)
 {
+    g_free(o->camera); g_free(o->camera_device);
     g_free(o->peer); g_free(o->bind_address);
     g_free(o->audio_input); g_free(o->audio_output);
 }

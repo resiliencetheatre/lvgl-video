@@ -4,6 +4,7 @@
 
 typedef struct {
     char *peer, *bind_address, *audio_input, *audio_output;
+    char *camera, *camera_device;
     int video_port, audio_port, text_port, rtp_mtu;
     gboolean start, test_media, disable_echo_cancellation;
 } AppOptions;

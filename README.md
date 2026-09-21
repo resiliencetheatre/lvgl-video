@@ -14,6 +14,49 @@ starts automatically without opening audio or network sockets.
 
 There is no smartcard integration, secure mode, quality slider or adaptive quality. All traffic is plaintext (unencrypted).
 
+## Camera selection
+
+The internal OV5647 remains the default (`--camera internal`). To use the
+Logitech StreamCam on `/dev/video1`:
+
+```sh
+# Local preview only
+lvgl-video --camera usb --camera-device /dev/video1
+
+# Call the desktop
+lvgl-video --camera usb --camera-device /dev/video1 \
+  --peer 192.168.178.41 --start
+
+# Return to the internal camera
+lvgl-video --camera internal --peer 192.168.178.41 --start
+```
+
+USB mode requires an explicit absolute device path to avoid selecting the Pi's
+CSI camera at `/dev/video0`. A stable `/dev/v4l/by-id/...` path is also accepted.
+The selected device must support raw YUYV (GStreamer YUY2) at 640x480, 10 fps,
+as confirmed for this StreamCam. This first USB implementation does not decode
+MJPEG or negotiate alternate resolutions/frame rates. An unavailable device or
+unsupported mode reports a pipeline error; it does not fall back to another
+camera. Stop/relaunch the application to change cameras.
+
+Camera selection applies to both local preview and outgoing video. Audio is
+still selected independently with `--audio-input` and `--audio-output`.
+`--test-media` and `LVGL_VIDEO_TEST_PATTERN=1` replace the selected capture device
+with synthetic video; USB selection then exercises the YUY2 conversion path.
+
+The Buildroot package now selects the GStreamer V4L2 plugin. For an existing
+image, update the application source (or use the local override below), then:
+
+```sh
+make O=output olddefconfig
+make O=output gst1-plugins-good-reconfigure
+make O=output lvgl-video-rebuild all
+```
+
+Boot the updated image and check `gst-inspect-1.0 v4l2src` before testing.
+The target kernel must support the webcam; the reported StreamCam capture node
+confirms it already does on this setup.
+
 ## Test against GTK Pipe
 
 For example, Pi = `192.168.1.10`, desktop = `192.168.1.20`.

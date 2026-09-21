@@ -13,10 +13,18 @@
 char *app_session_pipeline(const AppOptions *o)
 {
     const char *pattern = g_getenv("LVGL_VIDEO_TEST_PATTERN");
-    const char *source = o->test_media || (pattern && !strcmp(pattern, "1"))
-        ? "videotestsrc is-live=true pattern=ball" : "libcamerasrc";
-    char *capture = g_strdup_printf("%s ! video/x-raw,format=NV12,width=640,height=480,"
-        "framerate=10/1,colorimetry=bt709 ! " LATEST_QUEUE " ! videoconvert", source);
+    gboolean test = o->test_media || (pattern && !strcmp(pattern, "1"));
+    gboolean usb = !g_strcmp0(o->camera, "usb");
+    char *device = usb ? g_strescape(o->camera_device, NULL) : NULL;
+    char *source = test ? g_strdup("videotestsrc is-live=true pattern=ball")
+        : usb ? g_strdup_printf("v4l2src device=\"%s\"", device) : g_strdup("libcamerasrc");
+    /* The StreamCam supports raw YUY2 at exactly 640x480/10 fps. Let V4L2
+     * supply its colorimetry instead of forcing the internal camera's Rec709. */
+    char *capture = g_strdup_printf("%s ! video/x-raw,format=%s,width=640,height=480,"
+        "framerate=10/1%s ! " LATEST_QUEUE " ! videoconvert", source,
+        usb ? "YUY2" : "NV12", usb ? "" : ",colorimetry=bt709");
+    g_free(device);
+    g_free(source);
     if (!o->peer) {
         char *result = g_strdup_printf("%s ! video/x-raw,format=RGB16 ! appsink name=remote_video " FRAME_SINK, capture);
         g_free(capture);

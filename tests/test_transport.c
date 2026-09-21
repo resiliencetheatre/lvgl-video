@@ -66,6 +66,10 @@ int main(int argc, char **argv)
     AppOptions options = {.peer="127.0.0.2", .bind_address="127.0.0.1", .audio_input="default", .audio_output="default",
         .video_port=ports[0], .audio_port=ports[1], .text_port=ports[2], .rtp_mtu=1100, .test_media=TRUE,
         .disable_echo_cancellation=argc > 1 && !strcmp(argv[1], "--disable-echo-cancellation")};
+    if (argc > 1 && !strcmp(argv[1], "--usb")) {
+        options.camera = "usb";
+        options.camera_device = "/dev/video1";
+    }
     AppSession session;
     GError *error = NULL;
     g_assert_true(app_session_init(&session, &options, &error));
